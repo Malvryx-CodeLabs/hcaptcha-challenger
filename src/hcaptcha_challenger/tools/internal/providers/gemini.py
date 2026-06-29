@@ -39,16 +39,19 @@ class GeminiProvider:
     swap out for other providers in the future.
     """
 
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, *, base_url: str | None = None):
         """
         Initialize the Gemini provider.
 
         Args:
             api_key: Gemini API key.
             model: Model name to use (e.g., "gemini-2.5-pro").
+            base_url: Optional custom endpoint (proxy/gateway). When set, requests
+                are routed there instead of Google's default API host.
         """
         self._api_key = api_key
         self._model = model
+        self._base_url = base_url or None
         self._client: genai.Client | None = None
         self._response: types.GenerateContentResponse | None = None
 
@@ -56,7 +59,10 @@ class GeminiProvider:
     def client(self) -> genai.Client:
         """Lazy-initialize the Gemini client."""
         if self._client is None:
-            self._client = genai.Client(api_key=self._api_key)
+            http_options = (
+                types.HttpOptions(base_url=self._base_url) if self._base_url else None
+            )
+            self._client = genai.Client(api_key=self._api_key, http_options=http_options)
         return self._client
 
     @property

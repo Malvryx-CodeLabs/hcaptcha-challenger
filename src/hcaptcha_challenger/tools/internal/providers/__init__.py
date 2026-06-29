@@ -4,5 +4,6 @@
 from .protocol import ChatProvider
 from .gemini import GeminiProvider
 from .groq import GroqProvider
+from .aikit import AikitProvider
 
-__all__ = ["ChatProvider", "GeminiProvider", "GroqProvider"]
+__all__ = ["ChatProvider", "GeminiProvider", "GroqProvider", "AikitProvider"]

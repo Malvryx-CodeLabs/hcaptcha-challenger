@@ -127,6 +127,53 @@ You can override any model with the `CHALLENGE_CLASSIFIER_MODEL`, `IMAGE_CLASSIF
 
 > Note: Groq inlines images as base64 (max 4MB/image, 5 images per request) and uses best-effort JSON-schema structured output, falling back to JSON-object mode for models that don't support schema constraints.
 
+> **Accuracy tip:** these challenges need strong spatial grounding. Gemini Pro is the most reliable; for OpenAI-compatible backends, a vision-grounding model such as Qwen-VL works much better than small models. Small models tend to mis-format coordinates — the agent now auto-repairs the common case where a model merges `[row, col]` into a single token (e.g. `["00"]` → `[0,0]`), but a stronger model is still the better fix.
+
+## Using a custom Gemini endpoint (proxy / gateway)
+
+If your Gemini access goes through a proxy, set `GEMINI_BASE_URL` and keep the default `gemini` provider — you get Gemini's native, schema-enforced structured output (the most reliable path):
+
+```python
+agent_config = AgentConfig(
+    LLM_PROVIDER="gemini",
+    GEMINI_API_KEY="...",
+    GEMINI_BASE_URL="https://your-gemini-proxy.example.com",
+)
+```
+
+## Using Qwen-VL or any OpenAI-compatible endpoint
+
+Set `LLM_PROVIDER="openai"` and point it at any endpoint exposing `/v1/chat/completions` (Qwen via DashScope compatible-mode, vLLM, a gateway, etc.):
+
+```python
+agent_config = AgentConfig(
+    LLM_PROVIDER="openai",
+    OPENAI_API_KEY="...",
+    OPENAI_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    OPENAI_MODEL="qwen-vl-max",   # fills every *_MODEL field; override individually if needed
+)
+```
+
+`OPENAI_MODEL` is a convenience that sets all four reasoner models at once; you can still override `IMAGE_CLASSIFIER_MODEL` etc. individually. The OpenAI-compatible path reuses the same image-inlining and structured-output handling as the Groq provider.
+
+## Using Qwen via the aikit.club proxy
+
+[aikit.club](https://qwen-api.readme.io/docs/getting-started) is an OpenAI-compatible Qwen proxy with vision support and a token-refresh mechanism. It has its own provider (`LLM_PROVIDER="aikit"`) because its auth uses a single compressed token that expires and is refreshed via `POST /v1/refresh`.
+
+```python
+agent_config = AgentConfig(
+    LLM_PROVIDER="aikit",
+    AIKIT_API_KEY="H4sIAAAA...",   # compressed token from the browser snippet (or AIKIT_TOKEN env)
+    # AIKIT_MODEL="qwen-max-latest",  # vision-capable; this is the default
+    # AIKIT_BASE_URL="https://qwen.aikit.club/v1",  # default
+    # AIKIT_AUTO_REFRESH=True,        # refresh near expiry and on 401
+)
+```
+
+- **Vision models:** `qwen-max-latest` (default) and `qwen2.5-max` both accept images.
+- **Token refresh:** with `AIKIT_AUTO_REFRESH=True` (default), the provider refreshes the token automatically when it nears expiry and retries once on a `401`. If a refresh fails, regenerate the token from the browser per the [aikit docs](https://qwen-api.readme.io/docs/getting-started).
+- It reuses the same base64 image-inlining and structured-output handling as the other OpenAI-compatible providers.
+
 ## Dataset Collection
 
 If you have your own solver, you can also use `hcaptcha-challenger` to manage image datasets:

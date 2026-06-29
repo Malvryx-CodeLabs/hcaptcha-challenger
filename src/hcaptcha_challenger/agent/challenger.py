@@ -37,6 +37,7 @@ from hcaptcha_challenger.models import (
     LLMProvider,
     DEFAULT_GROQ_SCOT_MODEL,
     DEFAULT_GROQ_FAST_SHOT_MODEL,
+    DEFAULT_AIKIT_MODEL,
     GEMINI_DEFAULT_MODELS,
     SpatialPath,
     CaptchaPayload,
@@ -124,17 +125,61 @@ class AgentConfig(BaseSettings):
 
     LLM_PROVIDER: LLMProvider = Field(
         default=LLMProvider.GEMINI,
-        description="Which multimodal LLM backend to use: 'gemini' (default) or 'groq'.",
+        description="Which multimodal LLM backend to use: 'gemini' (default), 'groq', "
+        "or 'openai' (any OpenAI-compatible endpoint, e.g. Qwen-VL).",
     )
 
     GEMINI_API_KEY: SecretStr = Field(
         default_factory=lambda: SecretStr(os.environ.get("GEMINI_API_KEY", "")),
         description="Create API Key https://aistudio.google.com/app/apikey",
     )
+    GEMINI_BASE_URL: str = Field(
+        default_factory=lambda: os.environ.get("GEMINI_BASE_URL", ""),
+        description="Optional custom Gemini endpoint (proxy/gateway). "
+        "Leave empty to use Google's default API host.",
+    )
 
     GROQ_API_KEY: SecretStr = Field(
         default_factory=lambda: SecretStr(os.environ.get("GROQ_API_KEY", "")),
         description="Create API Key https://console.groq.com . Required when LLM_PROVIDER='groq'.",
+    )
+
+    # == OpenAI-compatible provider (e.g. Qwen-VL) == #
+    OPENAI_API_KEY: SecretStr = Field(
+        default_factory=lambda: SecretStr(os.environ.get("OPENAI_API_KEY", "")),
+        description="API key for the OpenAI-compatible endpoint. Required when LLM_PROVIDER='openai'.",
+    )
+    OPENAI_BASE_URL: str = Field(
+        default_factory=lambda: os.environ.get("OPENAI_BASE_URL", ""),
+        description="Base URL of the OpenAI-compatible endpoint, ending in '/v1' "
+        "(e.g. https://dashscope-intl.aliyuncs.com/compatible-mode/v1). "
+        "Required when LLM_PROVIDER='openai'.",
+    )
+    OPENAI_MODEL: str = Field(
+        default_factory=lambda: os.environ.get("OPENAI_MODEL", ""),
+        description="Convenience: when set with LLM_PROVIDER='openai', fills every "
+        "*_MODEL field still left at the Gemini defaults (e.g. 'qwen-vl-max').",
+    )
+
+    # == Qwen via aikit.club proxy (OpenAI-compatible + token refresh) == #
+    AIKIT_API_KEY: SecretStr = Field(
+        default_factory=lambda: SecretStr(
+            os.environ.get("AIKIT_API_KEY") or os.environ.get("AIKIT_TOKEN", "")
+        ),
+        description="Compressed aikit.club token (starts 'H4sIAAAA...'). "
+        "Required when LLM_PROVIDER='aikit'. See https://qwen-api.readme.io/docs/getting-started",
+    )
+    AIKIT_BASE_URL: str = Field(
+        default_factory=lambda: os.environ.get("AIKIT_BASE_URL", "https://qwen.aikit.club/v1"),
+        description="Base URL for the aikit.club OpenAI-compatible endpoint.",
+    )
+    AIKIT_MODEL: str = Field(
+        default_factory=lambda: os.environ.get("AIKIT_MODEL", DEFAULT_AIKIT_MODEL),
+        description="Vision-capable Qwen model served by aikit (default 'qwen-max-latest').",
+    )
+    AIKIT_AUTO_REFRESH: bool = Field(
+        default=True,
+        description="Auto-refresh the aikit token via /v1/refresh near expiry and on 401.",
     )
 
     cache_dir: Path = Path("tmp/.cache")
@@ -239,6 +284,60 @@ class AgentConfig(BaseSettings):
                 self.SPATIAL_POINT_REASONER_MODEL = DEFAULT_GROQ_SCOT_MODEL
             if self.SPATIAL_PATH_REASONER_MODEL in GEMINI_DEFAULT_MODELS:
                 self.SPATIAL_PATH_REASONER_MODEL = DEFAULT_GROQ_SCOT_MODEL
+        elif self.LLM_PROVIDER == LLMProvider.OPENAI:
+            if not self.OPENAI_API_KEY.get_secret_value():
+                raise ValueError(
+                    "OPENAI_API_KEY is required when LLM_PROVIDER='openai' but was not provided. "
+                    "Set it directly or via the OPENAI_API_KEY environment variable."
+                )
+            if not self.OPENAI_BASE_URL:
+                raise ValueError(
+                    "OPENAI_BASE_URL is required when LLM_PROVIDER='openai' (e.g. "
+                    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1). "
+                    "Set it directly or via the OPENAI_BASE_URL environment variable."
+                )
+            # Fill any model field still at a Gemini default with OPENAI_MODEL.
+            if self.OPENAI_MODEL:
+                for field in (
+                    "CHALLENGE_CLASSIFIER_MODEL",
+                    "IMAGE_CLASSIFIER_MODEL",
+                    "SPATIAL_POINT_REASONER_MODEL",
+                    "SPATIAL_PATH_REASONER_MODEL",
+                ):
+                    if getattr(self, field) in GEMINI_DEFAULT_MODELS:
+                        setattr(self, field, self.OPENAI_MODEL)
+            # Guard against silently sending a Gemini model name to a Qwen endpoint.
+            if any(
+                m in GEMINI_DEFAULT_MODELS
+                for m in (
+                    self.CHALLENGE_CLASSIFIER_MODEL,
+                    self.IMAGE_CLASSIFIER_MODEL,
+                    self.SPATIAL_POINT_REASONER_MODEL,
+                    self.SPATIAL_PATH_REASONER_MODEL,
+                )
+            ):
+                raise ValueError(
+                    "LLM_PROVIDER='openai' but model fields are still set to Gemini "
+                    "defaults. Set OPENAI_MODEL (e.g. 'qwen-vl-max') or each *_MODEL "
+                    "field to a model your endpoint serves."
+                )
+        elif self.LLM_PROVIDER == LLMProvider.AIKIT:
+            if not self.AIKIT_API_KEY.get_secret_value():
+                raise ValueError(
+                    "AIKIT_API_KEY is required when LLM_PROVIDER='aikit' but was not provided. "
+                    "Set it directly or via the AIKIT_API_KEY / AIKIT_TOKEN environment variable. "
+                    "Generate the token per https://qwen-api.readme.io/docs/getting-started"
+                )
+            # Fill any model field still at a Gemini default with AIKIT_MODEL
+            # (defaults to a vision-capable Qwen model).
+            for field in (
+                "CHALLENGE_CLASSIFIER_MODEL",
+                "IMAGE_CLASSIFIER_MODEL",
+                "SPATIAL_POINT_REASONER_MODEL",
+                "SPATIAL_PATH_REASONER_MODEL",
+            ):
+                if getattr(self, field) in GEMINI_DEFAULT_MODELS:
+                    setattr(self, field, self.AIKIT_MODEL)
         else:
             if not self.GEMINI_API_KEY.get_secret_value():
                 raise ValueError(
@@ -310,30 +409,48 @@ class RoboticArm:
         self._debug = config.enable_challenger_debug
 
         provider_type = self.config.LLM_PROVIDER.value
+        auto_refresh = True
         if self.config.LLM_PROVIDER == LLMProvider.GROQ:
             api_key = self.config.GROQ_API_KEY.get_secret_value()
+            base_url = None
+        elif self.config.LLM_PROVIDER == LLMProvider.OPENAI:
+            api_key = self.config.OPENAI_API_KEY.get_secret_value()
+            base_url = self.config.OPENAI_BASE_URL
+        elif self.config.LLM_PROVIDER == LLMProvider.AIKIT:
+            api_key = self.config.AIKIT_API_KEY.get_secret_value()
+            base_url = self.config.AIKIT_BASE_URL
+            auto_refresh = self.config.AIKIT_AUTO_REFRESH
         else:
             api_key = self.config.GEMINI_API_KEY.get_secret_value()
+            base_url = self.config.GEMINI_BASE_URL or None
 
         self._challenge_router = ChallengeRouter(
             api_key,
             model=self.config.CHALLENGE_CLASSIFIER_MODEL,
             provider_type=provider_type,
+            base_url=base_url,
+            auto_refresh=auto_refresh,
         )
         self._image_classifier = ImageClassifier(
             api_key,
             model=self.config.IMAGE_CLASSIFIER_MODEL,
             provider_type=provider_type,
+            base_url=base_url,
+            auto_refresh=auto_refresh,
         )
         self._spatial_path_reasoner = SpatialPathReasoner(
             api_key,
             model=self.config.SPATIAL_PATH_REASONER_MODEL,
             provider_type=provider_type,
+            base_url=base_url,
+            auto_refresh=auto_refresh,
         )
         self._spatial_point_reasoner = SpatialPointReasoner(
             api_key,
             model=self.config.SPATIAL_POINT_REASONER_MODEL,
             provider_type=provider_type,
+            base_url=base_url,
+            auto_refresh=auto_refresh,
         )
         self._skill_manager = SkillManager(agent_config=config)
         self.signal_crumb_count: int | None = None

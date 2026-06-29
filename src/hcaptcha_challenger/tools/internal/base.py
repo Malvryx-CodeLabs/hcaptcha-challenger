@@ -51,6 +51,8 @@ class Reasoner(ABC, Generic[ModelT, ResponseT]):
         provider: ChatProvider | None = None,
         provider_type: str = "gemini",
         api_key: str | None = None,
+        base_url: str | None = None,
+        auto_refresh: bool = True,
         **kwargs,
     ):
         """
@@ -63,25 +65,45 @@ class Reasoner(ABC, Generic[ModelT, ResponseT]):
             model: Model name to use.
             provider: Optional custom provider instance (overrides provider_type).
             provider_type: Which built-in provider to create when no explicit
-                ``provider`` is passed. One of ``"gemini"`` or ``"groq"``.
+                ``provider`` is passed. One of ``"gemini"``, ``"groq"`` or
+                ``"openai"`` (OpenAI-compatible endpoint, e.g. Qwen).
             api_key: API key for the selected provider (preferred over
                 ``gemini_api_key``).
+            base_url: Optional custom endpoint. For ``gemini`` it routes the SDK
+                to a proxy; for ``openai`` it is the required base URL.
             **kwargs: Additional options for subclasses.
         """
         self._api_key = api_key or gemini_api_key
         self._model = model
         self._provider_type = provider_type
+        self._base_url = base_url
+        self._auto_refresh = auto_refresh
         self._provider: ChatProvider = provider or self._create_default_provider()
         self._response = None
 
     def _create_default_provider(self) -> ChatProvider:
         """Create the provider selected by ``provider_type``."""
-        if self._provider_type == "groq":
-            # Imported lazily so Gemini-only users never touch the Groq module.
-            from .providers.groq import GroqProvider
+        # Qwen via the aikit.club proxy: OpenAI-compatible + token refresh.
+        if self._provider_type == "aikit":
+            from .providers.aikit import AIKIT_BASE_URL, AikitProvider
 
-            return GroqProvider(api_key=self._api_key, model=self._model)
-        return GeminiProvider(api_key=self._api_key, model=self._model)
+            return AikitProvider(
+                api_key=self._api_key,
+                model=self._model,
+                base_url=self._base_url or AIKIT_BASE_URL,
+                auto_refresh=self._auto_refresh,
+            )
+        # Both Groq and generic "openai" backends speak the OpenAI-compatible
+        # Chat Completions protocol, so they share one provider implementation.
+        if self._provider_type in ("groq", "openai"):
+            # Imported lazily so Gemini-only users never touch the module.
+            from .providers.groq import GROQ_BASE_URL, GroqProvider
+
+            base_url = self._base_url or GROQ_BASE_URL
+            return GroqProvider(api_key=self._api_key, model=self._model, base_url=base_url)
+        return GeminiProvider(
+            api_key=self._api_key, model=self._model, base_url=self._base_url
+        )
 
     @abstractmethod
     async def __call__(self, *args, **kwargs) -> ResponseT:

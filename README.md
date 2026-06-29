@@ -28,13 +28,14 @@ Just implement some interfaces to make `AI vs AI` possible.
 
 > This is a modified fork. The following changes were made by **Malvryx CodeLabs** on top of the upstream [QIN2DIM/hcaptcha-challenger](https://github.com/QIN2DIM/hcaptcha-challenger) project.
 
-- **Added Groq as an alternative LLM provider** alongside the default Gemini backend, so challenges can be solved with Groq's vision models (Llama 4 Scout / Maverick).
-  - New `GroqProvider` (`src/hcaptcha_challenger/tools/internal/providers/groq.py`) talking to Groq's OpenAI-compatible endpoint via `httpx` — no new required dependencies.
-  - New `LLM_PROVIDER` and `GROQ_API_KEY` settings on `AgentConfig`; the active provider only requires its own API key.
-  - When `LLM_PROVIDER="groq"`, default model names auto-switch to Groq's vision models (overridable per task).
-  - `LLMProvider` enum, `GroqModelType`, and Groq default-model constants added to `models.py`.
-  - Provider selection wired through the `Reasoner` base class and `RoboticArm`.
-  - Added example `examples/demo_groq_agent.py`, offline tests `tests/test_provider_groq.py`, and a "Using Groq" section in the docs.
+- **Added multiple alternative LLM providers** alongside the default Gemini backend, selectable via a new `LLM_PROVIDER` setting on `AgentConfig`. The active provider only needs its own API key.
+  - **Groq** (`LLM_PROVIDER="groq"`) — Groq's vision models (Llama 4 Scout, default). New `GroqProvider` talking to Groq's OpenAI-compatible endpoint via `httpx` (no new required dependencies).
+  - **Gemini custom endpoint** — `GEMINI_BASE_URL` routes the native Gemini provider through a proxy/gateway while keeping its schema-enforced output.
+  - **Generic OpenAI-compatible** (`LLM_PROVIDER="openai"`) — any `/v1/chat/completions` endpoint (e.g. Qwen-VL) via `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`.
+  - **Qwen via aikit.club** (`LLM_PROVIDER="aikit"`) — `AikitProvider` with automatic token refresh (`/v1/refresh`, proactive + on-401).
+  - **Robustness:** auto-repair of malformed grid coordinates (e.g. weaker models returning `["00"]` instead of `[0,0]`).
+  - `LLMProvider` enum, provider model constants, and provider selection wired through `models.py`, the `Reasoner` base class, and `RoboticArm`.
+  - Added example `examples/demo_groq_agent.py`, offline tests `tests/test_provider_groq.py`, and provider sections in the docs.
 
 Gemini remains the default provider, so existing setups are unaffected.
 

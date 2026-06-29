@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Literal, List, Dict, Any, Union
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Known Unicode homoglyphs mapping (legacy, kept for reference)
 BAD_CODE = {
@@ -289,6 +289,11 @@ class LLMProvider(str, Enum):
 
     GEMINI = "gemini"
     GROQ = "groq"
+    # Generic OpenAI-compatible Chat Completions endpoint (e.g. Qwen-VL,
+    # vLLM, or any gateway exposing /v1/chat/completions). Requires a base URL.
+    OPENAI = "openai"
+    # Qwen via the aikit.club proxy (OpenAI-compatible + token refresh).
+    AIKIT = "aikit"
 
 
 # https://console.groq.com/docs/vision — vision-capable models on Groq.
@@ -313,6 +318,10 @@ DEFAULT_GROQ_SCOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-instr
 # Used for the lightweight challenge-classification fallback.
 DEFAULT_GROQ_FAST_SHOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-instruct"
 
+# Default Qwen model for the aikit.club proxy. "qwen-max-latest" supports vision.
+# https://qwen-api.readme.io/docs/getting-started
+DEFAULT_AIKIT_MODEL: str = "qwen-max-latest"
+
 # The Gemini default models. Used to detect "still at default" so we can
 # transparently swap them for Groq defaults when LLM_PROVIDER=groq.
 GEMINI_DEFAULT_MODELS: List[str] = [DEFAULT_SCOT_MODEL, DEFAULT_FAST_SHOT_MODEL]
@@ -329,6 +338,25 @@ class BoundingBoxCoordinate(BaseModel):
         min_length=2,
         max_length=2,
     )
+
+    @field_validator("box_2d", mode="before")
+    @classmethod
+    def _repair_merged_coords(cls, v: Any) -> Any:
+        """
+        Repair coordinates that weaker models (via OpenAI-compatible APIs) emit
+        as a single merged token instead of a 2-element list, e.g.
+        ``[0,0] -> ["00"]``, ``[1,0] -> [10]``, ``[2,2] -> [22]``, ``"0,0" -> [0,0]``.
+
+        Gemini's native schema enforcement never triggers this; it only kicks in
+        for the malformed single-value shape so well-formed input is untouched.
+        """
+        if isinstance(v, str):
+            v = [v]
+        if isinstance(v, (list, tuple)) and len(v) == 1:
+            token = str(v[0]).strip().replace(",", "").replace(" ", "")
+            if len(token) == 2 and token.isdigit():
+                return [int(token[0]), int(token[1])]
+        return v
 
     def model_post_init(self, context: Any, /) -> None:
         val_for_x = self.box_2d[0]
