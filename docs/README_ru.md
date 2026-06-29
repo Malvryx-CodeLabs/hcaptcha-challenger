@@ -1,5 +1,19 @@
 # Документация
 
+## Изменения от Malvryx CodeLabs
+
+> Это модифицированный форк. Следующие изменения внесены организацией **Malvryx CodeLabs** поверх исходного проекта [QIN2DIM/hcaptcha-challenger](https://github.com/QIN2DIM/hcaptcha-challenger).
+
+- **Добавлен Groq как альтернативный провайдер LLM** наряду с используемым по умолчанию бэкендом Gemini, благодаря чему задания можно решать визуальными моделями Groq (Llama 4 Scout / Maverick).
+  - Новый `GroqProvider` (`src/hcaptcha_challenger/tools/internal/providers/groq.py`), обращающийся к OpenAI-совместимому эндпоинту Groq через `httpx` — без новых обязательных зависимостей.
+  - Новые настройки `LLM_PROVIDER` и `GROQ_API_KEY` в `AgentConfig`; активному провайдеру нужен только его собственный API-ключ.
+  - При `LLM_PROVIDER="groq"` имена моделей по умолчанию автоматически переключаются на визуальные модели Groq (можно переопределить для каждой задачи).
+  - В `models.py` добавлены перечисление `LLMProvider`, тип `GroqModelType` и константы моделей Groq по умолчанию.
+  - Выбор провайдера проведён через базовый класс `Reasoner` и `RoboticArm`.
+  - Добавлены пример `examples/demo_groq_agent.py`, офлайн-тесты `tests/test_provider_groq.py` и раздел «Using Groq» ниже.
+
+Gemini остаётся провайдером по умолчанию, поэтому существующие конфигурации не затрагиваются.
+
 ## Начало работы
 
 ### Введение

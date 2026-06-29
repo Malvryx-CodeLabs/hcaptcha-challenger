@@ -16,6 +16,8 @@ from hcaptcha_challenger.models import (
     ChallengeTypeEnum,
     FastShotModelType,
     SCoTModelType,
+    GroqModelType,
+    LLMProvider,
     CoordinateGrid,
 )
 from hcaptcha_challenger.tools import ChallengeClassifier
@@ -29,6 +31,8 @@ __all__ = [
     "ChallengeTypeEnum",
     "FastShotModelType",
     "SCoTModelType",
+    "GroqModelType",
+    "LLMProvider",
     "CoordinateGrid",
     "RequestType",
     "AgentV",

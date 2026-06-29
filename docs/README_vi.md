@@ -1,5 +1,19 @@
 # Tài liệu
 
+## Các thay đổi bởi Malvryx CodeLabs
+
+> Đây là một bản fork đã được chỉnh sửa. Các thay đổi sau đây được thực hiện bởi **Malvryx CodeLabs** trên nền dự án gốc [QIN2DIM/hcaptcha-challenger](https://github.com/QIN2DIM/hcaptcha-challenger).
+
+- **Thêm Groq làm nhà cung cấp LLM thay thế** bên cạnh backend Gemini mặc định, để giải thử thách bằng các mô hình thị giác của Groq (Llama 4 Scout / Maverick).
+  - `GroqProvider` mới (`src/hcaptcha_challenger/tools/internal/providers/groq.py`) gọi tới endpoint tương thích OpenAI của Groq qua `httpx` — không thêm phụ thuộc bắt buộc nào.
+  - Thêm cấu hình `LLM_PROVIDER` và `GROQ_API_KEY` vào `AgentConfig`; nhà cung cấp đang dùng chỉ cần API key của riêng nó.
+  - Khi `LLM_PROVIDER="groq"`, tên model mặc định sẽ tự động chuyển sang các mô hình thị giác của Groq (có thể ghi đè theo từng tác vụ).
+  - Thêm enum `LLMProvider`, kiểu `GroqModelType` và các hằng số model mặc định của Groq vào `models.py`.
+  - Việc chọn nhà cung cấp được nối thông qua lớp cơ sở `Reasoner` và `RoboticArm`.
+  - Thêm ví dụ `examples/demo_groq_agent.py`, các bài test offline `tests/test_provider_groq.py`, và mục "Using Groq" bên dưới.
+
+Gemini vẫn là nhà cung cấp mặc định, nên các thiết lập hiện có không bị ảnh hưởng.
+
 ## Bắt đầu
 
 ### Giới thiệu

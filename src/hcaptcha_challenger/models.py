@@ -284,6 +284,35 @@ THINKING_LEVEL_MODELS: List[str] = [
 ]
 
 
+class LLMProvider(str, Enum):
+    """The multimodal LLM backend used to solve challenges."""
+
+    GEMINI = "gemini"
+    GROQ = "groq"
+
+
+# https://console.groq.com/docs/vision — vision-capable models on Groq.
+GroqModelType = Union[
+    str,
+    Literal[
+        # Llama 4 Maverick — stronger reasoning, better for spatial challenges.
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        # Llama 4 Scout — faster / cheaper, good default for classification.
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+    ],
+]
+
+# Used for SCoT-style tasks (image_label_binary, spatial reasoning).
+DEFAULT_GROQ_SCOT_MODEL: GroqModelType = "meta-llama/llama-4-maverick-17b-128e-instruct"
+
+# Used for the lightweight challenge-classification fallback.
+DEFAULT_GROQ_FAST_SHOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-instruct"
+
+# The Gemini default models. Used to detect "still at default" so we can
+# transparently swap them for Groq defaults when LLM_PROVIDER=groq.
+GEMINI_DEFAULT_MODELS: List[str] = [DEFAULT_SCOT_MODEL, DEFAULT_FAST_SHOT_MODEL]
+
+
 class ChallengeRouterResult(BaseModel):
     challenge_prompt: str
     challenge_type: ChallengeTypeEnum

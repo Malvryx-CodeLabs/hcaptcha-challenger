@@ -49,24 +49,38 @@ class Reasoner(ABC, Generic[ModelT, ResponseT]):
         model: ModelT | None = None,
         *,
         provider: ChatProvider | None = None,
+        provider_type: str = "gemini",
+        api_key: str | None = None,
         **kwargs,
     ):
         """
         Initialize the reasoner.
 
         Args:
-            gemini_api_key: Gemini API key (used if no custom provider is set).
+            gemini_api_key: API key for the selected provider. Kept under this
+                name for backwards compatibility; ``api_key`` takes precedence
+                when given.
             model: Model name to use.
-            provider: Optional custom provider (for extensibility).
+            provider: Optional custom provider instance (overrides provider_type).
+            provider_type: Which built-in provider to create when no explicit
+                ``provider`` is passed. One of ``"gemini"`` or ``"groq"``.
+            api_key: API key for the selected provider (preferred over
+                ``gemini_api_key``).
             **kwargs: Additional options for subclasses.
         """
-        self._api_key = gemini_api_key
+        self._api_key = api_key or gemini_api_key
         self._model = model
+        self._provider_type = provider_type
         self._provider: ChatProvider = provider or self._create_default_provider()
         self._response = None
 
-    def _create_default_provider(self) -> GeminiProvider:
-        """Create the default Gemini provider."""
+    def _create_default_provider(self) -> ChatProvider:
+        """Create the provider selected by ``provider_type``."""
+        if self._provider_type == "groq":
+            # Imported lazily so Gemini-only users never touch the Groq module.
+            from .providers.groq import GroqProvider
+
+            return GroqProvider(api_key=self._api_key, model=self._model)
         return GeminiProvider(api_key=self._api_key, model=self._model)
 
     @abstractmethod

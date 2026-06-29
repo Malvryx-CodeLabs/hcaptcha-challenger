@@ -1,5 +1,19 @@
 # Documentation
 
+## Modifications by Malvryx CodeLabs
+
+> This is a modified fork. The following changes were made by **Malvryx CodeLabs** on top of the upstream [QIN2DIM/hcaptcha-challenger](https://github.com/QIN2DIM/hcaptcha-challenger) project.
+
+- **Added Groq as an alternative LLM provider** alongside the default Gemini backend, so challenges can be solved with Groq's vision models (Llama 4 Scout / Maverick).
+  - New `GroqProvider` (`src/hcaptcha_challenger/tools/internal/providers/groq.py`) talking to Groq's OpenAI-compatible endpoint via `httpx` — no new required dependencies.
+  - New `LLM_PROVIDER` and `GROQ_API_KEY` settings on `AgentConfig`; the active provider only requires its own API key.
+  - When `LLM_PROVIDER="groq"`, default model names auto-switch to Groq's vision models (overridable per task).
+  - `LLMProvider` enum, `GroqModelType`, and Groq default-model constants added to `models.py`.
+  - Provider selection wired through the `Reasoner` base class and `RoboticArm`.
+  - Added example `examples/demo_groq_agent.py`, offline tests `tests/test_provider_groq.py`, and a "Using Groq" section below.
+
+Gemini remains the default provider, so existing setups are unaffected.
+
 ## Get started
 
 ### Introduction
@@ -83,6 +97,29 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 ```
+
+## Using Groq instead of Gemini
+
+The agent supports [Groq](https://console.groq.com)'s vision models as an alternative backend. Create a `GROQ_API_KEY`, then set `LLM_PROVIDER="groq"`:
+
+```python
+agent_config = AgentConfig(
+    LLM_PROVIDER="groq",
+    # GROQ_API_KEY is read from the environment by default, or pass it explicitly:
+    # GROQ_API_KEY="gsk_...",
+)
+```
+
+When `LLM_PROVIDER="groq"` and the model fields are left at their defaults, they are switched automatically to Groq's vision models:
+
+| Task | Default Groq model |
+|------|--------------------|
+| Challenge classifier | `meta-llama/llama-4-scout-17b-16e-instruct` |
+| Image classifier / spatial reasoners | `meta-llama/llama-4-maverick-17b-128e-instruct` |
+
+You can override any of them with the `CHALLENGE_CLASSIFIER_MODEL`, `IMAGE_CLASSIFIER_MODEL`, `SPATIAL_POINT_REASONER_MODEL`, and `SPATIAL_PATH_REASONER_MODEL` fields. Gemini remains the default provider, so existing setups are unaffected. See `examples/demo_groq_agent.py` for a complete runnable example.
+
+> Note: Groq inlines images as base64 (max 4MB/image, 5 images per request) and uses best-effort JSON-schema structured output, falling back to JSON-object mode for models that don't support schema constraints.
 
 ## Dataset Collection
 

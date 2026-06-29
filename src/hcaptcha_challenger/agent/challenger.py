@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import msgpack
 from loguru import logger
 from playwright.async_api import Locator, expect, Page, Response, TimeoutError, FrameLocator, Frame
-from pydantic import Field, field_validator, SecretStr
+from pydantic import Field, model_validator, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -34,6 +34,10 @@ from hcaptcha_challenger.models import (
     DEFAULT_SCOT_MODEL,
     DEFAULT_FAST_SHOT_MODEL,
     FastShotModelType,
+    LLMProvider,
+    DEFAULT_GROQ_SCOT_MODEL,
+    DEFAULT_GROQ_FAST_SHOT_MODEL,
+    GEMINI_DEFAULT_MODELS,
     SpatialPath,
     CaptchaPayload,
     IGNORE_REQUEST_TYPE_LITERAL,
@@ -118,9 +122,19 @@ IGNORE_REQUEST_TYPE_LIST = List[SINGLE_IGNORE_TYPE]
 class AgentConfig(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 
+    LLM_PROVIDER: LLMProvider = Field(
+        default=LLMProvider.GEMINI,
+        description="Which multimodal LLM backend to use: 'gemini' (default) or 'groq'.",
+    )
+
     GEMINI_API_KEY: SecretStr = Field(
         default_factory=lambda: SecretStr(os.environ.get("GEMINI_API_KEY", "")),
         description="Create API Key https://aistudio.google.com/app/apikey",
+    )
+
+    GROQ_API_KEY: SecretStr = Field(
+        default_factory=lambda: SecretStr(os.environ.get("GROQ_API_KEY", "")),
+        description="Create API Key https://console.groq.com . Required when LLM_PROVIDER='groq'.",
     )
 
     cache_dir: Path = Path("tmp/.cache")
@@ -201,28 +215,38 @@ class AgentConfig(BaseSettings):
     )
     skills_update_branch: str = Field(default="main", description="GitHub branch for skills update")
 
-    @field_validator('GEMINI_API_KEY', mode="before")
-    @classmethod
-    def validate_api_key(cls, v: Any) -> str:
+    @model_validator(mode="after")
+    def validate_provider_credentials(self) -> "AgentConfig":
         """
-        Validates that the GEMINI_API_KEY is not empty.
-
-        Args:
-            v: The API key value to validate
-
-        Returns:
-            The validated API key
-
-        Raises:
-            ValueError: If the API key is empty
+        Ensure the selected provider has an API key, and transparently switch
+        the default Gemini model names to Groq defaults when LLM_PROVIDER='groq'
+        so users only have to set the provider + key to get started.
         """
-        if not v or not isinstance(v, str):
-            raise ValueError(
-                "GEMINI_API_KEY is required but not provided. "
-                "Please either pass it directly or set the GEMINI_API_KEY environment variable."
-                "Create API Key -> https://aistudio.google.com/app/apikey"
-            )
-        return v
+        if self.LLM_PROVIDER == LLMProvider.GROQ:
+            if not self.GROQ_API_KEY.get_secret_value():
+                raise ValueError(
+                    "GROQ_API_KEY is required when LLM_PROVIDER='groq' but was not provided. "
+                    "Pass it directly or set the GROQ_API_KEY environment variable. "
+                    "Create API Key -> https://console.groq.com"
+                )
+            # Only swap models the user left at the Gemini defaults; respect any
+            # explicit Groq model the user set.
+            if self.CHALLENGE_CLASSIFIER_MODEL in GEMINI_DEFAULT_MODELS:
+                self.CHALLENGE_CLASSIFIER_MODEL = DEFAULT_GROQ_FAST_SHOT_MODEL
+            if self.IMAGE_CLASSIFIER_MODEL in GEMINI_DEFAULT_MODELS:
+                self.IMAGE_CLASSIFIER_MODEL = DEFAULT_GROQ_SCOT_MODEL
+            if self.SPATIAL_POINT_REASONER_MODEL in GEMINI_DEFAULT_MODELS:
+                self.SPATIAL_POINT_REASONER_MODEL = DEFAULT_GROQ_SCOT_MODEL
+            if self.SPATIAL_PATH_REASONER_MODEL in GEMINI_DEFAULT_MODELS:
+                self.SPATIAL_PATH_REASONER_MODEL = DEFAULT_GROQ_SCOT_MODEL
+        else:
+            if not self.GEMINI_API_KEY.get_secret_value():
+                raise ValueError(
+                    "GEMINI_API_KEY is required but not provided. "
+                    "Please either pass it directly or set the GEMINI_API_KEY environment variable. "
+                    "Create API Key -> https://aistudio.google.com/app/apikey"
+                )
+        return self
 
     @property
     def spatial_grid_cache(self):
@@ -285,21 +309,31 @@ class RoboticArm:
         self.config = config
         self._debug = config.enable_challenger_debug
 
+        provider_type = self.config.LLM_PROVIDER.value
+        if self.config.LLM_PROVIDER == LLMProvider.GROQ:
+            api_key = self.config.GROQ_API_KEY.get_secret_value()
+        else:
+            api_key = self.config.GEMINI_API_KEY.get_secret_value()
+
         self._challenge_router = ChallengeRouter(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            api_key,
             model=self.config.CHALLENGE_CLASSIFIER_MODEL,
+            provider_type=provider_type,
         )
         self._image_classifier = ImageClassifier(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            api_key,
             model=self.config.IMAGE_CLASSIFIER_MODEL,
+            provider_type=provider_type,
         )
         self._spatial_path_reasoner = SpatialPathReasoner(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            api_key,
             model=self.config.SPATIAL_PATH_REASONER_MODEL,
+            provider_type=provider_type,
         )
         self._spatial_point_reasoner = SpatialPointReasoner(
-            gemini_api_key=self.config.GEMINI_API_KEY.get_secret_value(),
+            api_key,
             model=self.config.SPATIAL_POINT_REASONER_MODEL,
+            provider_type=provider_type,
         )
         self._skill_manager = SkillManager(agent_config=config)
         self.signal_crumb_count: int | None = None

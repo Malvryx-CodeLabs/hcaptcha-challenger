@@ -1,5 +1,19 @@
 # 文档
 
+## Malvryx CodeLabs 的修改
+
+> 这是一个修改版分支。以下改动由 **Malvryx CodeLabs** 在上游项目 [QIN2DIM/hcaptcha-challenger](https://github.com/QIN2DIM/hcaptcha-challenger) 的基础上完成。
+
+- **新增 Groq 作为可选的 LLM 提供方**，与默认的 Gemini 后端并存，使挑战可以使用 Groq 的视觉模型（Llama 4 Scout / Maverick）求解。
+  - 新增 `GroqProvider`（`src/hcaptcha_challenger/tools/internal/providers/groq.py`），通过 `httpx` 调用 Groq 兼容 OpenAI 的接口——无需新增必需依赖。
+  - 在 `AgentConfig` 上新增 `LLM_PROVIDER` 与 `GROQ_API_KEY` 配置项；当前所选提供方只需配置自身的 API Key。
+  - 当 `LLM_PROVIDER="groq"` 时，默认模型名称会自动切换为 Groq 的视觉模型（可按任务单独覆盖）。
+  - 在 `models.py` 中新增 `LLMProvider` 枚举、`GroqModelType` 以及 Groq 默认模型常量。
+  - 提供方选择逻辑贯穿 `Reasoner` 基类与 `RoboticArm`。
+  - 新增示例 `examples/demo_groq_agent.py`、离线测试 `tests/test_provider_groq.py`，以及下文的 “Using Groq” 章节。
+
+Gemini 仍为默认提供方，因此现有配置不受影响。
+
 ## 快速入门
 
 ### 简介

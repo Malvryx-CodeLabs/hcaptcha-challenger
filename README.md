@@ -24,6 +24,20 @@ Just implement some interfaces to make `AI vs AI` possible.
 
 **Documentation:** [English](./docs/README.md) | [简体中文](./docs/README_zh.md) | [Русский 🇷🇺](./docs/README_ru.md) | [Tiếng Việt](./docs/README_vi.md) 🙌
 
+## Modifications by Malvryx CodeLabs
+
+> This is a modified fork. The following changes were made by **Malvryx CodeLabs** on top of the upstream [QIN2DIM/hcaptcha-challenger](https://github.com/QIN2DIM/hcaptcha-challenger) project.
+
+- **Added Groq as an alternative LLM provider** alongside the default Gemini backend, so challenges can be solved with Groq's vision models (Llama 4 Scout / Maverick).
+  - New `GroqProvider` (`src/hcaptcha_challenger/tools/internal/providers/groq.py`) talking to Groq's OpenAI-compatible endpoint via `httpx` — no new required dependencies.
+  - New `LLM_PROVIDER` and `GROQ_API_KEY` settings on `AgentConfig`; the active provider only requires its own API key.
+  - When `LLM_PROVIDER="groq"`, default model names auto-switch to Groq's vision models (overridable per task).
+  - `LLMProvider` enum, `GroqModelType`, and Groq default-model constants added to `models.py`.
+  - Provider selection wired through the `Reasoner` base class and `RoboticArm`.
+  - Added example `examples/demo_groq_agent.py`, offline tests `tests/test_provider_groq.py`, and a "Using Groq" section in the docs.
+
+Gemini remains the default provider, so existing setups are unaffected.
+
 ## What's features
 
 | Challenge Type                          | Pluggable Resource                                           | Agent Capability |
