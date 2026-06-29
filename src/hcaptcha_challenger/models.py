@@ -292,18 +292,23 @@ class LLMProvider(str, Enum):
 
 
 # https://console.groq.com/docs/vision — vision-capable models on Groq.
+# NOTE: Groq's catalog changes over time and varies by account/tier. Check the
+# models actually available to your key with:
+#   curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
 GroqModelType = Union[
     str,
     Literal[
-        # Llama 4 Maverick — stronger reasoning, better for spatial challenges.
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-        # Llama 4 Scout — faster / cheaper, good default for classification.
+        # Llama 4 Scout — vision-capable, broadly available. Safe default.
         "meta-llama/llama-4-scout-17b-16e-instruct",
+        # Llama 4 Maverick — stronger, but NOT available on every account/tier
+        # (returns 404 when not enabled). Set explicitly only if your key lists it.
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
     ],
 ]
 
 # Used for SCoT-style tasks (image_label_binary, spatial reasoning).
-DEFAULT_GROQ_SCOT_MODEL: GroqModelType = "meta-llama/llama-4-maverick-17b-128e-instruct"
+# Defaults to Scout because it is the most widely-available vision model on Groq.
+DEFAULT_GROQ_SCOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # Used for the lightweight challenge-classification fallback.
 DEFAULT_GROQ_FAST_SHOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-instruct"

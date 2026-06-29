@@ -115,9 +115,15 @@ When `LLM_PROVIDER="groq"` and the model fields are left at their defaults, they
 | Task | Default Groq model |
 |------|--------------------|
 | Challenge classifier | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| Image classifier / spatial reasoners | `meta-llama/llama-4-maverick-17b-128e-instruct` |
+| Image classifier / spatial reasoners | `meta-llama/llama-4-scout-17b-16e-instruct` |
 
-You can override any of them with the `CHALLENGE_CLASSIFIER_MODEL`, `IMAGE_CLASSIFIER_MODEL`, `SPATIAL_POINT_REASONER_MODEL`, and `SPATIAL_PATH_REASONER_MODEL` fields. Gemini remains the default provider, so existing setups are unaffected. See `examples/demo_groq_agent.py` for a complete runnable example.
+Scout is used by default because it is the most widely-available vision model on Groq. A stronger model such as `meta-llama/llama-4-maverick-17b-128e-instruct` may give better spatial-reasoning results, but it is **not enabled on every account/tier** and returns `404` when unavailable. Check what your key can access first:
+
+```bash
+curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
+```
+
+You can override any model with the `CHALLENGE_CLASSIFIER_MODEL`, `IMAGE_CLASSIFIER_MODEL`, `SPATIAL_POINT_REASONER_MODEL`, and `SPATIAL_PATH_REASONER_MODEL` fields. Gemini remains the default provider, so existing setups are unaffected. See `examples/demo_groq_agent.py` for a complete runnable example.
 
 > Note: Groq inlines images as base64 (max 4MB/image, 5 images per request) and uses best-effort JSON-schema structured output, falling back to JSON-object mode for models that don't support schema constraints.
 

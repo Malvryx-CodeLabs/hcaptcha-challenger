@@ -12,9 +12,13 @@ Only two settings differ from demo_captcha_agent.py:
     - GROQ_API_KEY
 
 When LLM_PROVIDER='groq' and the model fields are left at their defaults,
-they are automatically switched to Groq's vision models:
-    - classifier  -> meta-llama/llama-4-scout-17b-16e-instruct
-    - reasoners    -> meta-llama/llama-4-maverick-17b-128e-instruct
+they are automatically switched to Groq's most widely-available vision model:
+    - classifier + reasoners -> meta-llama/llama-4-scout-17b-16e-instruct
+
+A stronger model (e.g. meta-llama/llama-4-maverick-17b-128e-instruct) may solve
+spatial challenges better, but it is not enabled on every account/tier and will
+404 when unavailable. List what your key can access with:
+    curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
 You can override any of them explicitly via the *_MODEL fields below.
 """
 import asyncio
