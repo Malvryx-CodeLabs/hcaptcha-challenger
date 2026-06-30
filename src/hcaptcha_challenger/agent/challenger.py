@@ -141,7 +141,8 @@ class AgentConfig(BaseSettings):
 
     GROQ_API_KEY: SecretStr = Field(
         default_factory=lambda: SecretStr(os.environ.get("GROQ_API_KEY", "")),
-        description="Create API Key https://console.groq.com . Required when LLM_PROVIDER='groq'.",
+        description="Create API Key https://console.groq.com . Required when LLM_PROVIDER='groq'. "
+        "Accepts multiple keys, comma-separated, to rotate round-robin and fail over on 429.",
     )
 
     # == OpenAI-compatible provider (e.g. Qwen-VL) == #
@@ -167,7 +168,9 @@ class AgentConfig(BaseSettings):
             os.environ.get("AIKIT_API_KEY") or os.environ.get("AIKIT_TOKEN", "")
         ),
         description="Compressed aikit.club token (starts 'H4sIAAAA...'). "
-        "Required when LLM_PROVIDER='aikit'. See https://qwen-api.readme.io/docs/getting-started",
+        "Required when LLM_PROVIDER='aikit'. Accepts multiple tokens, comma-separated, "
+        "rotated round-robin with per-token refresh. "
+        "See https://qwen-api.readme.io/docs/getting-started",
     )
     AIKIT_BASE_URL: str = Field(
         default_factory=lambda: os.environ.get("AIKIT_BASE_URL", "https://qwen.aikit.club/v1"),

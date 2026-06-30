@@ -110,6 +110,8 @@ agent_config = AgentConfig(
 )
 ```
 
+**Multiple keys (rotation):** `GROQ_API_KEY` accepts several keys, comma-separated (e.g. `gsk_a,gsk_b,gsk_c`). Requests are spread **round-robin** across them, and any key that hits a rate/usage limit (`429`) is rotated out for the next — so no single key is exhausted quickly.
+
 When `LLM_PROVIDER="groq"` and the model fields are left at their defaults, they are switched automatically to Groq's vision models:
 
 | Task | Default Groq model |
@@ -163,7 +165,7 @@ agent_config = AgentConfig(
 ```python
 agent_config = AgentConfig(
     LLM_PROVIDER="aikit",
-    AIKIT_API_KEY="H4sIAAAA...",   # compressed token from the browser snippet (or AIKIT_TOKEN env)
+    AIKIT_API_KEY="H4sIAAAA...",   # one token, or several comma-separated (or AIKIT_TOKEN env)
     # AIKIT_MODEL="qwen-max-latest",  # vision-capable; this is the default
     # AIKIT_BASE_URL="https://qwen.aikit.club/v1",  # default
     # AIKIT_AUTO_REFRESH=True,        # refresh near expiry and on 401
@@ -171,7 +173,8 @@ agent_config = AgentConfig(
 ```
 
 - **Vision models:** `qwen-max-latest` (default) and `qwen2.5-max` both accept images.
-- **Token refresh:** with `AIKIT_AUTO_REFRESH=True` (default), the provider refreshes the token automatically when it nears expiry and retries once on a `401`. If a refresh fails, regenerate the token from the browser per the [aikit docs](https://qwen-api.readme.io/docs/getting-started).
+- **Multiple tokens (rotation):** `AIKIT_API_KEY` accepts several tokens, comma-separated (e.g. `H4sIA_a,H4sIA_b`). Requests are spread **round-robin** and a token that hits a rate/usage limit (`429`) is rotated out for the next, so one token isn't exhausted quickly.
+- **Token refresh:** with `AIKIT_AUTO_REFRESH=True` (default), **each token** is refreshed independently — proactively when it nears expiry and once reactively on a `401`. If a refresh fails, regenerate the token from the browser per the [aikit docs](https://qwen-api.readme.io/docs/getting-started).
 - It reuses the same base64 image-inlining and structured-output handling as the other OpenAI-compatible providers.
 
 ## Dataset Collection

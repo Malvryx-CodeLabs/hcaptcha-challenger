@@ -60,19 +60,46 @@ class GroqProvider:
     :class:`GeminiProvider`.
     """
 
-    def __init__(self, api_key: str, model: str, *, base_url: str = GROQ_BASE_URL):
+    def __init__(self, api_key, model: str, *, base_url: str = GROQ_BASE_URL):
         """
         Initialize the Groq provider.
 
         Args:
-            api_key: Groq API key (``gsk_...``). Create one at https://console.groq.com.
+            api_key: One or more Groq API keys (``gsk_...``). Accepts a single
+                string, a comma-separated string, or a list. When more than one
+                key is given, requests are spread round-robin across keys and a
+                key that returns 429 (rate/usage limit) is rotated out for the
+                next, so no single key is exhausted quickly.
             model: Vision-capable model id, e.g. ``meta-llama/llama-4-scout-17b-16e-instruct``.
             base_url: Override for the OpenAI-compatible endpoint.
         """
-        self._api_key = api_key
+        self._keys = self.normalize_keys(api_key)
+        # Back-compat: expose the first key as the "current" key.
+        self._api_key = self._keys[0]
+        self._key_idx = -1
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._response: dict | None = None
+
+    @staticmethod
+    def normalize_keys(api_key) -> List[str]:
+        """Normalize a str / comma-separated str / list into a list of keys."""
+        raw: List[str] = []
+        if isinstance(api_key, str):
+            raw = api_key.split(",")
+        elif isinstance(api_key, (list, tuple)):
+            for item in api_key:
+                raw.extend(str(item).split(","))
+        keys = [k.strip() for k in raw if k and k.strip()]
+        if not keys:
+            raise ValueError("At least one API key is required.")
+        return keys
+
+    def _next_key(self) -> str:
+        """Advance round-robin and return the next key."""
+        self._key_idx = (self._key_idx + 1) % len(self._keys)
+        self._api_key = self._keys[self._key_idx]
+        return self._api_key
 
     @property
     def last_response(self) -> dict | None:
@@ -132,17 +159,31 @@ class GroqProvider:
         return messages
 
     async def _post(self, payload: dict) -> dict:
-        """Send a chat completion request and return the parsed JSON body."""
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        """
+        Send a chat completion request and return the parsed JSON body.
+
+        Spreads load round-robin across the key pool and, on a 429 (rate/usage
+        limit), rotates to the next key and retries. Raises the last 429 only if
+        every key is rate-limited.
+        """
+        url = f"{self._base_url}/chat/completions"
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-            resp = await client.post(
-                f"{self._base_url}/chat/completions", headers=headers, json=payload
-            )
+            resp = None
+            for _ in range(len(self._keys)):
+                key = self._next_key()
+                headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code == 429 and len(self._keys) > 1:
+                    logger.warning(
+                        f"Key #{self._key_idx + 1}/{len(self._keys)} rate-limited (429); "
+                        f"rotating to the next key."
+                    )
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            # Every key was rate-limited: surface the last 429.
             resp.raise_for_status()
-            return resp.json()
+            return resp.json()  # pragma: no cover - unreachable
 
     @retry(
         stop=stop_after_attempt(3),

@@ -135,85 +135,189 @@ class TestGroqParse:
             GroqProvider._parse(data, ImageBinaryChallenge)
 
 
-class _FakeResponse:
-    def __init__(self, payload):
-        self._payload = payload
+class _FakeResp:
+    """httpx.Response stand-in with a settable status code."""
 
-    def raise_for_status(self):
-        return None
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
 
     def json(self):
         return self._payload
 
+    def raise_for_status(self):
+        import httpx
 
-class _FakeAsyncClient:
-    """Minimal async httpx.AsyncClient stand-in that records POSTs."""
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                "error",
+                request=httpx.Request("POST", "http://test"),
+                response=httpx.Response(self.status_code),
+            )
 
-    last_url = None
-    last_json = None
-    response_payload = {}
 
-    def __init__(self, *a, **k):
-        pass
+class _Backend:
+    """Shared state for the fake httpx client: scripted responses + call log."""
 
-    async def __aenter__(self):
-        return self
+    def __init__(self):
+        from collections import deque
 
-    async def __aexit__(self, *a):
-        return False
+        self.chat = deque()  # FakeResp returned in order for /chat/completions
+        self.refresh = _FakeResp(200, {"access_token": "NEW_TOK", "expires_at": 1782755670})
+        self.log = []  # list of ("chat"|"refresh", token-or-payload)
 
-    async def post(self, url, **kwargs):
-        type(self).last_url = url
-        type(self).last_json = kwargs.get("json")
-        return _FakeResponse(type(self).response_payload)
+
+def _fake_client_cls(backend: "_Backend"):
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, json=None, **k):
+            if url.endswith("/refresh"):
+                backend.log.append(("refresh", (json or {}).get("token")))
+                return backend.refresh
+            token = (headers or {}).get("Authorization", "").replace("Bearer ", "")
+            backend.log.append(("chat", token))
+            return backend.chat.popleft()
+
+    return _FakeClient
+
+
+class TestGroqKeyRotation:
+    def test_normalize_keys(self):
+        assert GroqProvider.normalize_keys("a,b , c") == ["a", "b", "c"]
+        assert GroqProvider.normalize_keys(["a", "b"]) == ["a", "b"]
+        assert GroqProvider.normalize_keys("solo") == ["solo"]
+        with pytest.raises(ValueError):
+            GroqProvider.normalize_keys("")
+
+    def test_round_robin_spreads_keys(self, monkeypatch):
+        import hcaptcha_challenger.tools.internal.providers.groq as groq
+
+        backend = _Backend()
+        backend.chat.extend([_FakeResp(200, {"ok": 1}) for _ in range(3)])
+        monkeypatch.setattr(groq.httpx, "AsyncClient", _fake_client_cls(backend))
+
+        p = GroqProvider(api_key="k1,k2,k3", model="m")
+        asyncio.run(p._post({}))
+        asyncio.run(p._post({}))
+        asyncio.run(p._post({}))
+        assert [t for kind, t in backend.log] == ["k1", "k2", "k3"]
+
+    def test_429_failover_to_next_key(self, monkeypatch):
+        import hcaptcha_challenger.tools.internal.providers.groq as groq
+
+        backend = _Backend()
+        backend.chat.extend([_FakeResp(429), _FakeResp(200, {"ok": 1})])
+        monkeypatch.setattr(groq.httpx, "AsyncClient", _fake_client_cls(backend))
+
+        p = GroqProvider(api_key=["k1", "k2"], model="m")
+        result = asyncio.run(p._post({}))
+        assert result == {"ok": 1}
+        assert [t for _, t in backend.log] == ["k1", "k2"]  # rotated after 429
+
+    def test_all_keys_rate_limited_raises(self, monkeypatch):
+        import httpx
+
+        import hcaptcha_challenger.tools.internal.providers.groq as groq
+
+        backend = _Backend()
+        backend.chat.extend([_FakeResp(429), _FakeResp(429)])
+        monkeypatch.setattr(groq.httpx, "AsyncClient", _fake_client_cls(backend))
+
+        p = GroqProvider(api_key="k1,k2", model="m")
+        with pytest.raises(httpx.HTTPStatusError):
+            asyncio.run(p._post({}))
 
 
 class TestAikitTokenRefresh:
-    def test_refresh_updates_token_and_expiry(self, monkeypatch):
+    def test_refresh_updates_slot(self, monkeypatch):
         import hcaptcha_challenger.tools.internal.providers.aikit as aikit
 
-        _FakeAsyncClient.response_payload = {
-            "expires_at": 1782755670,
-            "access_token": "H4sIAAAA_NEW_TOKEN",
-        }
-        monkeypatch.setattr(aikit.httpx, "AsyncClient", _FakeAsyncClient)
+        backend = _Backend()
+        monkeypatch.setattr(aikit.httpx, "AsyncClient", _fake_client_cls(backend))
 
         p = aikit.AikitProvider(api_key="H4sIAAAA_OLD", model="qwen-max-latest")
-        ok = asyncio.run(p._refresh_token())
+        slot = p._slots[0]
+        ok = asyncio.run(p._refresh_slot(slot))
         assert ok is True
-        assert p._api_key == "H4sIAAAA_NEW_TOKEN"
-        assert p._expires_at == 1782755670
-        # refresh sends the *current* token to /v1/refresh
-        assert _FakeAsyncClient.last_url.endswith("/v1/refresh")
-        assert _FakeAsyncClient.last_json == {"token": "H4sIAAAA_OLD"}
+        assert slot.token == "NEW_TOK"
+        assert slot.expires_at == 1782755670
+        assert backend.log == [("refresh", "H4sIAAAA_OLD")]
 
     def test_ensure_fresh_refreshes_when_expired(self, monkeypatch):
         import hcaptcha_challenger.tools.internal.providers.aikit as aikit
 
-        p = aikit.AikitProvider(api_key="t", model="qwen-max-latest", expires_at=1)  # epoch -> expired
+        p = aikit.AikitProvider(api_key="t", model="qwen-max-latest", expires_at=1)
         called = {"n": 0}
 
-        async def fake_refresh():
+        async def fake_refresh(slot):
             called["n"] += 1
             return True
 
-        monkeypatch.setattr(p, "_refresh_token", fake_refresh)
-        asyncio.run(p._ensure_fresh())
+        monkeypatch.setattr(p, "_refresh_slot", fake_refresh)
+        asyncio.run(p._ensure_fresh(p._slots[0]))
         assert called["n"] == 1
 
     def test_ensure_fresh_skips_when_no_expiry(self, monkeypatch):
         import hcaptcha_challenger.tools.internal.providers.aikit as aikit
 
-        p = aikit.AikitProvider(api_key="t", model="qwen-max-latest")  # expires_at=None
+        p = aikit.AikitProvider(api_key="t", model="qwen-max-latest")
         called = {"n": 0}
 
-        async def fake_refresh():
+        async def fake_refresh(slot):
             called["n"] += 1
             return True
 
-        monkeypatch.setattr(p, "_refresh_token", fake_refresh)
-        asyncio.run(p._ensure_fresh())
+        monkeypatch.setattr(p, "_refresh_slot", fake_refresh)
+        asyncio.run(p._ensure_fresh(p._slots[0]))
         assert called["n"] == 0
+
+    def test_multi_token_round_robin(self, monkeypatch):
+        import hcaptcha_challenger.tools.internal.providers.aikit as aikit
+
+        backend = _Backend()
+        backend.chat.extend([_FakeResp(200, {"ok": 1}), _FakeResp(200, {"ok": 2})])
+        monkeypatch.setattr(aikit.httpx, "AsyncClient", _fake_client_cls(backend))
+
+        p = aikit.AikitProvider(api_key="tokA,tokB", model="qwen-max-latest")
+        asyncio.run(p._post({}))
+        asyncio.run(p._post({}))
+        assert [t for _, t in backend.log] == ["tokA", "tokB"]
+
+    def test_429_rotates_token(self, monkeypatch):
+        import hcaptcha_challenger.tools.internal.providers.aikit as aikit
+
+        backend = _Backend()
+        backend.chat.extend([_FakeResp(429), _FakeResp(200, {"ok": 1})])
+        monkeypatch.setattr(aikit.httpx, "AsyncClient", _fake_client_cls(backend))
+
+        p = aikit.AikitProvider(api_key=["tokA", "tokB"], model="qwen-max-latest")
+        result = asyncio.run(p._post({}))
+        assert result == {"ok": 1}
+        assert [t for _, t in backend.log] == ["tokA", "tokB"]
+
+    def test_401_refreshes_then_retries(self, monkeypatch):
+        import hcaptcha_challenger.tools.internal.providers.aikit as aikit
+
+        backend = _Backend()
+        # first call 401 -> refresh -> retry 200
+        backend.chat.extend([_FakeResp(401), _FakeResp(200, {"ok": 1})])
+        monkeypatch.setattr(aikit.httpx, "AsyncClient", _fake_client_cls(backend))
+
+        p = aikit.AikitProvider(api_key="tokA", model="qwen-max-latest")
+        result = asyncio.run(p._post({}))
+        assert result == {"ok": 1}
+        kinds = [kind for kind, _ in backend.log]
+        assert kinds == ["chat", "refresh", "chat"]
+        # retry used the refreshed token
+        assert backend.log[-1] == ("chat", "NEW_TOK")
 
     def test_base_url_default(self):
         import hcaptcha_challenger.tools.internal.providers.aikit as aikit
