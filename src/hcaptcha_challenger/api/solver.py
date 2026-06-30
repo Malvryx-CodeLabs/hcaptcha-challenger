@@ -53,6 +53,7 @@ async def solve_captcha(
     siteurl: str,
     rqdata: str | None = None,
     nav_timeout_s: float = 60.0,
+    stream_hub=None,
 ) -> dict:
     """
     Returns a dict: {success, token, expiration, error, raw}.
@@ -66,6 +67,15 @@ async def solve_captcha(
     body = _PAGE_TEMPLATE.format(sitekey=sitekey, rqdata=rqdata_attr)
 
     page = await ctx.new_page()
+
+    # Optional debug screencast: pump live browser frames to the MJPEG stream.
+    screencast = None
+    if stream_hub is not None:
+        from hcaptcha_challenger.api.stream import ScreencastSession
+
+        stream_hub.set_active(f"Solving {sitekey[:8]}… · {target_host}")
+        screencast = ScreencastSession(stream_hub)
+        await screencast.start(ctx, page)
 
     async def _route_handler(route: Route) -> None:
         request = route.request
@@ -105,6 +115,10 @@ async def solve_captcha(
         )
         return result
     finally:
+        if screencast is not None:
+            await screencast.stop()
+            if stream_hub is not None:
+                stream_hub.set_idle()
         try:
             await page.close()
         except Exception:  # pragma: no cover

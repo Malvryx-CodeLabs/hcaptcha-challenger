@@ -92,6 +92,28 @@ class ApiSettings(BaseSettings):
         default=True, description="Expose /docs and /openapi.json. Disable in prod if unused."
     )
 
+    # -- Debug live stream --
+    # When enabled, the server exposes a continuous MJPEG video stream of the
+    # browser on STREAM_PORT (open it in VLC / a browser). The stream starts
+    # immediately showing "No Task" and switches to the live page the moment a
+    # solve begins, without the stream connection breaking. This is a debugging
+    # aid: it FORCES MAX_CONCURRENT_SOLVES to 1 (only one task can be streamed).
+    STREAM_ENABLED: bool = Field(
+        default=False,
+        description="Expose a live MJPEG debug stream of the browser. Forces "
+        "concurrency to 1. Intended for debugging behind a private network (e.g. Tailscale).",
+    )
+    STREAM_PORT: int = Field(default=8089, description="Port for the MJPEG debug stream.")
+    STREAM_FPS: int = Field(
+        default=6, ge=1, le=30, description="Frames per second pushed to the stream."
+    )
+    STREAM_QUALITY: int = Field(
+        default=60, ge=10, le=100, description="JPEG quality (1-100) of stream frames."
+    )
+    STREAM_MAX_WIDTH: int = Field(
+        default=1280, ge=320, le=1920, description="Max width of stream frames (downscaled)."
+    )
+
     # -- Misc --
     LOG_LEVEL: str = Field(default="info", description="Uvicorn/log level.")
 

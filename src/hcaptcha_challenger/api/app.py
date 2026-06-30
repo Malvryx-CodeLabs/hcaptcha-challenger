@@ -23,7 +23,10 @@ _REPO_URL = "https://github.com/QIN2DIM/hcaptcha-challenger"
 
 
 def create_app(
-    settings: Optional[ApiSettings] = None, *, solve_func: Optional[SolveFunc] = None
+    settings: Optional[ApiSettings] = None,
+    *,
+    solve_func: Optional[SolveFunc] = None,
+    stream_hub=None,
 ) -> FastAPI:
     """
     Build the app.
@@ -32,11 +35,23 @@ def create_app(
         settings: API settings (defaults to environment-derived ApiSettings).
         solve_func: Inject a solver to bypass the real browser (used in tests).
             When provided, the browser/provider are not initialised.
+        stream_hub: Optional StreamHub for the debug live stream. When provided,
+            concurrency is forced to 1 and each solve is screencast to the hub.
     """
     settings = settings or ApiSettings()
     settings.validate_security()
 
-    manager = SolveManager(settings.MAX_CONCURRENT_SOLVES, settings.MAX_QUEUE)
+    # The debug stream has a single shared frame buffer, so only one solve can be
+    # streamed at a time. Force concurrency to 1 (but keep the configured queue).
+    max_concurrent = settings.MAX_CONCURRENT_SOLVES
+    if stream_hub is not None and max_concurrent != 1:
+        logger.warning(
+            "STREAM_ENABLED: forcing MAX_CONCURRENT_SOLVES from "
+            f"{max_concurrent} to 1 (the debug stream supports one task)."
+        )
+        max_concurrent = 1
+
+    manager = SolveManager(max_concurrent, settings.MAX_QUEUE)
     rate_limiter = RateLimiter(settings.RATE_LIMIT_RPM)
     browser_manager: Optional[BrowserManager] = None
     agent_config = None
@@ -54,11 +69,12 @@ def create_app(
             )
             await browser_manager.start()
             app.state.solve_func = _make_real_solve_func(
-                browser_manager, agent_config, settings
+                browser_manager, agent_config, settings, stream_hub
             )
             logger.success(
                 f"Solver API ready - provider={agent_config.LLM_PROVIDER.value} "
-                f"concurrency={settings.MAX_CONCURRENT_SOLVES} queue={settings.MAX_QUEUE}"
+                f"concurrency={max_concurrent} queue={settings.MAX_QUEUE}"
+                + (" stream=on" if stream_hub is not None else "")
             )
         else:
             app.state.solve_func = solve_func
@@ -166,7 +182,7 @@ def create_app(
 
 
 def _make_real_solve_func(
-    browser_manager: BrowserManager, agent_config, settings: ApiSettings
+    browser_manager: BrowserManager, agent_config, settings: ApiSettings, stream_hub=None
 ) -> SolveFunc:
     from hcaptcha_challenger.api.solver import solve_captcha
 
@@ -179,6 +195,7 @@ def _make_real_solve_func(
                 siteurl=siteurl,
                 rqdata=rqdata,
                 nav_timeout_s=settings.NAV_TIMEOUT_S,
+                stream_hub=stream_hub,
             )
 
     return _solve
