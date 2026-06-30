@@ -5,6 +5,7 @@
 # Description:
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from hcaptcha_challenger import models as types
@@ -48,7 +49,15 @@ __all__ = [
     "types",
 ]
 
-LOG_DIR = Path(__file__).parent.joinpath("logs", "{time:YYYY-MM-DD}")
+# Log location. Defaults to a folder next to the package, but that path is
+# read-only when the package is installed system-wide and the process runs as a
+# non-root user (e.g. in a container). Set HCAPTCHA_LOG_DIR to a writable path
+# to override.
+_LOG_BASE = os.environ.get("HCAPTCHA_LOG_DIR")
+if _LOG_BASE:
+    LOG_DIR = Path(_LOG_BASE).joinpath("{time:YYYY-MM-DD}")
+else:
+    LOG_DIR = Path(__file__).parent.joinpath("logs", "{time:YYYY-MM-DD}")
 
 init_log(
     runtime=LOG_DIR.joinpath("runtime.log"),

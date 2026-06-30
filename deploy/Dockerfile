@@ -8,6 +8,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     # Browsers live in a world-readable path so the non-root user can use them.
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    # Write logs to a writable path (the package dir is read-only for non-root).
+    HCAPTCHA_LOG_DIR=/app/logs \
     # uv-dynamic-versioning needs git history; bypass it for a clean source build.
     UV_DYNAMIC_VERSIONING_BYPASS=1.0.0
 
@@ -21,8 +23,9 @@ RUN pip install ".[api]" \
     && python -m playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright
 
-# Run as a non-root user.
+# Run as a non-root user. Pre-create the writable log dir it owns.
 RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/logs \
     && chown -R appuser:appuser /app
 USER appuser
 
