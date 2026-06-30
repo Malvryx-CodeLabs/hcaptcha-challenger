@@ -33,10 +33,13 @@ Just implement some interfaces to make `AI vs AI` possible.
   - **Gemini custom endpoint** — `GEMINI_BASE_URL` routes the native Gemini provider through a proxy/gateway while keeping its schema-enforced output.
   - **Generic OpenAI-compatible** (`LLM_PROVIDER="openai"`) — any `/v1/chat/completions` endpoint (e.g. Qwen-VL) via `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`.
   - **Qwen via aikit.club** (`LLM_PROVIDER="aikit"`) — `AikitProvider` with automatic token refresh (`/v1/refresh`, proactive + on-401).
-  - **Robustness:** auto-repair of malformed grid coordinates (e.g. weaker models returning `["00"]` instead of `[0,0]`).
+  - **Omegatech gateway** (`LLM_PROVIDER="omegatech"`) — gpt-4o-mini-class vision via a single-GET gateway, no API key. Image-URL only, so screenshots are uploaded to a temp host (shared `TempUploader`) and deleted after each solve.
+  - **Multi-key rotation** — Groq and aikit accept several comma-separated keys/tokens, rotated round-robin with 429 failover.
+  - **Robustness:** auto-repair of malformed grid coordinates (e.g. weaker models returning `["00"]` instead of `[0,0]`), and tightened prompts (stricter coordinate format + step-by-step) to help non-Gemini models.
   - `LLMProvider` enum, provider model constants, and provider selection wired through `models.py`, the `Reasoner` base class, and `RoboticArm`.
-  - Added example `examples/demo_groq_agent.py`, offline tests `tests/test_provider_groq.py`, and provider sections in the docs.
+  - Added example `examples/demo_groq_agent.py`, offline tests, and provider sections in the docs.
 - **Production-grade solver API** (`hcaptcha_challenger.api`) — a deployable FastAPI service: `POST /v1/solve` with `{sitekey, siteurl}` returns the hCaptcha token. Bounded concurrency with request **queueing**, API-key auth, rate limiting, health/readiness/stats endpoints, and one-command Docker deploy. Defaults tuned for Linux / 4 GB / 2 CPU; all limits are env-configurable. See [`deploy/README.md`](./deploy/README.md). Run with `hc-api`.
+  - **Debug live stream** (`HCAPTCHA_API_STREAM_ENABLED=true`) — a continuous MJPEG stream of the browser on a separate port (CDP screencast), viewable in VLC or a browser; shows "No Task" until a solve starts. Forces concurrency to 1.
 
 Gemini remains the default provider, so existing setups are unaffected.
 

@@ -38,6 +38,7 @@ from hcaptcha_challenger.models import (
     DEFAULT_GROQ_SCOT_MODEL,
     DEFAULT_GROQ_FAST_SHOT_MODEL,
     DEFAULT_AIKIT_MODEL,
+    DEFAULT_OMEGATECH_MODEL,
     GEMINI_DEFAULT_MODELS,
     SpatialPath,
     CaptchaPayload,
@@ -183,6 +184,23 @@ class AgentConfig(BaseSettings):
     AIKIT_AUTO_REFRESH: bool = Field(
         default=True,
         description="Auto-refresh the aikit token via /v1/refresh near expiry and on 401.",
+    )
+
+    # == Omegatech gateway (GPT-4o-mini class, single-GET, image-URL only) == #
+    OMEGATECH_API_KEY: SecretStr = Field(
+        default_factory=lambda: SecretStr(os.environ.get("OMEGATECH_API_KEY", "")),
+        description="Optional. The Omegatech gateway needs no auth; this field exists "
+        "only for parity and may be left empty.",
+    )
+    OMEGATECH_BASE_URL: str = Field(
+        default_factory=lambda: os.environ.get(
+            "OMEGATECH_BASE_URL", "https://omegatech-api.dixonomega.tech/api/ai"
+        ),
+        description="Base URL for the Omegatech gateway (model name is appended as a path segment).",
+    )
+    OMEGATECH_MODEL: str = Field(
+        default_factory=lambda: os.environ.get("OMEGATECH_MODEL", DEFAULT_OMEGATECH_MODEL),
+        description="Model path segment served by Omegatech (default 'Gpt-4-mini').",
     )
 
     cache_dir: Path = Path("tmp/.cache")
@@ -341,6 +359,17 @@ class AgentConfig(BaseSettings):
             ):
                 if getattr(self, field) in GEMINI_DEFAULT_MODELS:
                     setattr(self, field, self.AIKIT_MODEL)
+        elif self.LLM_PROVIDER == LLMProvider.OMEGATECH:
+            # No API key required. Fill any model field still at a Gemini default
+            # with the Omegatech model path segment (default 'Gpt-4-mini').
+            for field in (
+                "CHALLENGE_CLASSIFIER_MODEL",
+                "IMAGE_CLASSIFIER_MODEL",
+                "SPATIAL_POINT_REASONER_MODEL",
+                "SPATIAL_PATH_REASONER_MODEL",
+            ):
+                if getattr(self, field) in GEMINI_DEFAULT_MODELS:
+                    setattr(self, field, self.OMEGATECH_MODEL)
         else:
             if not self.GEMINI_API_KEY.get_secret_value():
                 raise ValueError(
@@ -423,6 +452,9 @@ class RoboticArm:
             api_key = self.config.AIKIT_API_KEY.get_secret_value()
             base_url = self.config.AIKIT_BASE_URL
             auto_refresh = self.config.AIKIT_AUTO_REFRESH
+        elif self.config.LLM_PROVIDER == LLMProvider.OMEGATECH:
+            api_key = self.config.OMEGATECH_API_KEY.get_secret_value()
+            base_url = self.config.OMEGATECH_BASE_URL
         else:
             api_key = self.config.GEMINI_API_KEY.get_secret_value()
             base_url = self.config.GEMINI_BASE_URL or None

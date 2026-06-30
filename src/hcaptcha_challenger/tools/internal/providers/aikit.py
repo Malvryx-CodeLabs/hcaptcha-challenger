@@ -13,8 +13,6 @@ generic ``openai`` provider because it adds a token-refresh mechanism:
 
 Docs: https://qwen-api.readme.io/docs/getting-started
 """
-import mimetypes
-import os
 import re
 import time
 from pathlib import Path
@@ -24,14 +22,15 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel
 
+from ._upload import DEFAULT_UPLOAD_BASE_URL, TempUploader
 from .groq import GroqProvider
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
 AIKIT_BASE_URL = "https://qwen.aikit.club/v1"
 
-# Default temporary file host used to give aikit a fetchable image URL.
-DEFAULT_UPLOAD_BASE_URL = "https://tmp.malvryx.dev"
+# DEFAULT_UPLOAD_BASE_URL re-exported for backwards compatibility; the temp-host
+# upload logic now lives in the shared _upload.TempUploader.
 
 # Refresh this many seconds before the token's stated expiry.
 _REFRESH_LEEWAY_SECONDS = 60
@@ -93,16 +92,7 @@ class AikitProvider(GroqProvider):
         # aikit accepts image URLs only (not base64). To support the local
         # screenshot solver, each image is uploaded to a temporary file host, the
         # CDN URL is sent to aikit, and the file is deleted after the request.
-        self._upload_enabled = os.environ.get("AIKIT_IMAGE_UPLOAD", "true").lower() not in (
-            "0",
-            "false",
-            "no",
-        )
-        self._upload_base = os.environ.get(
-            "AIKIT_UPLOAD_BASE_URL", DEFAULT_UPLOAD_BASE_URL
-        ).rstrip("/")
-        self._upload_api_key = os.environ.get("AIKIT_UPLOAD_API_KEY", "")
-        self._upload_expiry = os.environ.get("AIKIT_UPLOAD_EXPIRY", "1h")
+        self._uploader = TempUploader()
 
     async def generate_with_images(
         self, *, images, response_schema, user_prompt=None, description=None, **kwargs
@@ -123,7 +113,7 @@ class AikitProvider(GroqProvider):
                 **kwargs,
             )
 
-        if not self._upload_enabled:
+        if not self._uploader.enabled:
             raise ValueError(
                 "aikit.club vision needs image URLs, but AIKIT_IMAGE_UPLOAD is disabled. "
                 "Enable it, or use LLM_PROVIDER='groq'/'gemini'/'openai' for the solver."
@@ -133,7 +123,7 @@ class AikitProvider(GroqProvider):
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as up_client:
             try:
                 for path in valid:
-                    uploads.append(await self._upload_image(up_client, path))
+                    uploads.append(await self._uploader.upload(up_client, path))
                 image_parts = [
                     {"type": "image_url", "image_url": {"url": u["url"]}} for u in uploads
                 ]
@@ -146,40 +136,7 @@ class AikitProvider(GroqProvider):
                 )
             finally:
                 for u in uploads:
-                    await self._delete_image(up_client, u)
-
-    async def _upload_image(self, client: httpx.AsyncClient, path: Path) -> dict:
-        """Upload one file; return {id, url, delete_token}."""
-        mime = mimetypes.guess_type(str(path))[0] or "image/png"
-        headers = {"X-API-Key": self._upload_api_key} if self._upload_api_key else {}
-        with open(path, "rb") as fh:
-            files = {"file": (path.name, fh, mime)}
-            data = {"type": "temp", "expiry": self._upload_expiry}
-            resp = await client.post(
-                f"{self._upload_base}/upload", files=files, data=data, headers=headers
-            )
-        resp.raise_for_status()
-        j = resp.json()
-        url = j.get("cdnUrl") or j.get("directUrl")
-        if not url:
-            raise ValueError(f"Temp upload returned no URL: {j}")
-        return {"id": j.get("id"), "url": url, "delete_token": j.get("deleteToken")}
-
-    async def _delete_image(self, client: httpx.AsyncClient, upload: dict) -> None:
-        """Best-effort deletion of an uploaded temp file."""
-        if not upload.get("id"):
-            return
-        try:
-            headers = {}
-            if upload.get("delete_token"):
-                headers["X-Delete-Token"] = upload["delete_token"]
-            if self._upload_api_key:
-                headers["X-API-Key"] = self._upload_api_key
-            await client.request(
-                "DELETE", f"{self._upload_base}/f/{upload['id']}", headers=headers
-            )
-        except Exception as e:  # pragma: no cover - best-effort cleanup
-            logger.warning(f"Failed to delete temp upload {upload.get('id')}: {e}")
+                    await self._uploader.delete(up_client, u)
 
     @staticmethod
     def _parse(data: dict, response_schema):
