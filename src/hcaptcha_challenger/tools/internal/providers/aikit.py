@@ -13,6 +13,7 @@ generic ``openai`` provider because it adds a token-refresh mechanism:
 
 Docs: https://qwen-api.readme.io/docs/getting-started
 """
+import re
 import time
 from typing import List, Type, TypeVar
 
@@ -28,6 +29,10 @@ AIKIT_BASE_URL = "https://qwen.aikit.club/v1"
 
 # Refresh this many seconds before the token's stated expiry.
 _REFRESH_LEEWAY_SECONDS = 60
+
+# The proxy appends a metadata block to every answer; strip it before parsing.
+# e.g. "...real answer...\n\n<details>\n<summary></summary>\n```\nResponse ID: ...\n```\n</details>"
+_DETAILS_RE = re.compile(r"\n*<details>.*?</details>\s*$", re.DOTALL)
 
 
 class _TokenSlot:
@@ -78,6 +83,39 @@ class AikitProvider(GroqProvider):
         self._auto_refresh = auto_refresh
         self._slots = [_TokenSlot(token=k, expires_at=expires_at) for k in self._keys]
         self._slot_idx = -1
+
+    async def generate_with_images(
+        self, *, images, response_schema, user_prompt=None, description=None, **kwargs
+    ):
+        """
+        aikit.club only accepts image *URLs*, not inline/base64 images, which this
+        codebase always produces (it inlines local screenshots). Fail loudly with
+        guidance instead of silently returning empty answers.
+        """
+        if images:
+            raise ValueError(
+                "aikit.club vision only accepts image URLs, not inline/base64 images, "
+                "so LLM_PROVIDER='aikit' cannot solve screenshot-based hCaptcha challenges. "
+                "Use LLM_PROVIDER='groq', 'gemini', or 'openai' (e.g. DashScope qwen-vl) instead."
+            )
+        return await super().generate_with_images(
+            images=images,
+            response_schema=response_schema,
+            user_prompt=user_prompt,
+            description=description,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _parse(data: dict, response_schema):
+        """Strip the proxy's trailing <details> block before normal parsing."""
+        try:
+            content = data["choices"][0]["message"]["content"]
+            if isinstance(content, str):
+                data["choices"][0]["message"]["content"] = _DETAILS_RE.sub("", content).strip()
+        except (KeyError, IndexError, TypeError):
+            pass
+        return GroqProvider._parse(data, response_schema)
 
     def _next_slot(self) -> _TokenSlot:
         """Advance round-robin and return the next token slot."""

@@ -172,10 +172,10 @@ agent_config = AgentConfig(
 )
 ```
 
-- **Vision models:** `qwen-max-latest` (default) and `qwen2.5-max` both accept images.
-- **Multiple tokens (rotation):** `AIKIT_API_KEY` accepts several tokens, comma-separated (e.g. `H4sIA_a,H4sIA_b`). Requests are spread **round-robin** and a token that hits a rate/usage limit (`429`) is rotated out for the next, so one token isn't exhausted quickly.
-- **Token refresh:** with `AIKIT_AUTO_REFRESH=True` (default), **each token** is refreshed independently — proactively when it nears expiry and once reactively on a `401`. If a refresh fails, regenerate the token from the browser per the [aikit docs](https://qwen-api.readme.io/docs/getting-started).
-- It reuses the same base64 image-inlining and structured-output handling as the other OpenAI-compatible providers.
+- **Model:** defaults to `qwen3-vl-plus` (the vision model the endpoint actually serves). The catalog changes — list what your token has with `curl https://qwen.aikit.club/v1/models -H "Authorization: Bearer $AIKIT_API_KEY"`.
+- **⚠️ Not usable for the screenshot solver.** aikit's vision only accepts image **URLs**, not inline/base64 images. Every reasoner here inlines local screenshots as base64, which aikit silently ignores — so `LLM_PROVIDER="aikit"` **cannot solve hCaptcha challenges**. The provider now raises a clear error in that case. For solving, use `gemini`, `groq`, or `openai` (e.g. DashScope `qwen3-vl-plus`/`qwen-vl-max`), which all accept base64.
+- **Multiple tokens (rotation):** `AIKIT_API_KEY` accepts several tokens, comma-separated. Requests are spread **round-robin** and a token that hits a rate/usage limit (`429`) is rotated out for the next.
+- **Token refresh:** with `AIKIT_AUTO_REFRESH=True` (default), **each token** is refreshed independently — proactively near expiry and once reactively on a `401`. If a refresh fails, regenerate the token per the [aikit docs](https://qwen-api.readme.io/docs/getting-started).
 
 ## Dataset Collection
 

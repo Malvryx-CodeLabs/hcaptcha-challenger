@@ -318,9 +318,12 @@ DEFAULT_GROQ_SCOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-instr
 # Used for the lightweight challenge-classification fallback.
 DEFAULT_GROQ_FAST_SHOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-# Default Qwen model for the aikit.club proxy. "qwen-max-latest" supports vision.
-# https://qwen-api.readme.io/docs/getting-started
-DEFAULT_AIKIT_MODEL: str = "qwen-max-latest"
+# Default Qwen model for the aikit.club proxy. "qwen3-vl-plus" is the vision
+# (VL) model actually served by the endpoint; the model catalog changes, so check
+#   curl https://qwen.aikit.club/v1/models -H "Authorization: Bearer $AIKIT_API_KEY"
+# NOTE: aikit only accepts image *URLs*, not inline base64, so it cannot be used
+# for the screenshot-based solver (which inlines images). See AikitProvider.
+DEFAULT_AIKIT_MODEL: str = "qwen3-vl-plus"
 
 # The Gemini default models. Used to detect "still at default" so we can
 # transparently swap them for Groq defaults when LLM_PROVIDER=groq.

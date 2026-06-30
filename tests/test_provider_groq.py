@@ -340,10 +340,33 @@ class TestAikitConfig:
 
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         cfg = AgentConfig(LLM_PROVIDER="aikit", AIKIT_API_KEY="H4sIAAAA_x")
-        assert cfg.IMAGE_CLASSIFIER_MODEL == "qwen-max-latest"
-        assert cfg.SPATIAL_PATH_REASONER_MODEL == "qwen-max-latest"
+        assert cfg.IMAGE_CLASSIFIER_MODEL == "qwen3-vl-plus"
+        assert cfg.SPATIAL_PATH_REASONER_MODEL == "qwen3-vl-plus"
         assert cfg.AIKIT_BASE_URL == "https://qwen.aikit.club/v1"
         assert cfg.AIKIT_AUTO_REFRESH is True
+
+
+class TestAikitImageHandling:
+    def test_rejects_inline_images(self):
+        import hcaptcha_challenger.tools.internal.providers.aikit as aikit
+
+        p = aikit.AikitProvider(api_key="t", model="qwen3-vl-plus")
+        with pytest.raises(ValueError, match="image URLs, not inline"):
+            asyncio.run(
+                p.generate_with_images(images=["/tmp/x.png"], response_schema=ImageBinaryChallenge)
+            )
+
+    def test_strips_details_block(self):
+        import hcaptcha_challenger.tools.internal.providers.aikit as aikit
+
+        content = (
+            '{"challenge_prompt": "p", "coordinates": []}'
+            "\n\n<details>\n<summary></summary>\n```\nResponse ID: abc\n```\n</details>"
+        )
+        data = {"choices": [{"message": {"content": content}}]}
+        result = aikit.AikitProvider._parse(data, ImageBinaryChallenge)
+        assert result.challenge_prompt == "p"
+        assert result.coordinates == []
 
 
 class TestAgentConfigProviderSelection:
