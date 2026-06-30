@@ -173,9 +173,19 @@ agent_config = AgentConfig(
 ```
 
 - **Model:** defaults to `qwen3-vl-plus` (the vision model the endpoint actually serves). The catalog changes — list what your token has with `curl https://qwen.aikit.club/v1/models -H "Authorization: Bearer $AIKIT_API_KEY"`.
-- **⚠️ Not usable for the screenshot solver.** aikit's vision only accepts image **URLs**, not inline/base64 images. Every reasoner here inlines local screenshots as base64, which aikit silently ignores — so `LLM_PROVIDER="aikit"` **cannot solve hCaptcha challenges**. The provider now raises a clear error in that case. For solving, use `gemini`, `groq`, or `openai` (e.g. DashScope `qwen3-vl-plus`/`qwen-vl-max`), which all accept base64.
+- **Images via temporary URL.** aikit's vision accepts image **URLs**, not inline/base64. Since the solver works with local screenshots, the provider uploads each screenshot to a temporary file host, sends aikit the CDN URL, and **deletes the file once the solve is done**. This is transparent — `LLM_PROVIDER="aikit"` solves challenges normally. Configure the uploader with these (optional) env vars:
+
+  | Env var | Default | Purpose |
+  |---|---|---|
+  | `AIKIT_IMAGE_UPLOAD` | `true` | Set `false` to disable uploading (then aikit can't do vision). |
+  | `AIKIT_UPLOAD_BASE_URL` | `https://tmp.malvryx.dev` | Temp file host (must expose `/upload` + `DELETE /f/:id`). |
+  | `AIKIT_UPLOAD_API_KEY` | — | Optional `X-API-Key` for higher upload rate limits. |
+  | `AIKIT_UPLOAD_EXPIRY` | `1h` | Fallback expiry if a delete is missed. |
+
+  > Note: the screenshot is briefly hosted on the upload service so aikit's backend can fetch it. Use a host you trust; the file is deleted right after each solve.
 - **Multiple tokens (rotation):** `AIKIT_API_KEY` accepts several tokens, comma-separated. Requests are spread **round-robin** and a token that hits a rate/usage limit (`429`) is rotated out for the next.
 - **Token refresh:** with `AIKIT_AUTO_REFRESH=True` (default), **each token** is refreshed independently — proactively near expiry and once reactively on a `401`. If a refresh fails, regenerate the token per the [aikit docs](https://qwen-api.readme.io/docs/getting-started).
+- The proxy appends a `<details>…</details>` metadata block to answers; the provider strips it before parsing.
 
 ## Dataset Collection
 

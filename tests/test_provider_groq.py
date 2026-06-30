@@ -347,13 +347,69 @@ class TestAikitConfig:
 
 
 class TestAikitImageHandling:
-    def test_rejects_inline_images(self):
+    def test_uploads_url_then_deletes(self, monkeypatch, tmp_path):
         import hcaptcha_challenger.tools.internal.providers.aikit as aikit
 
+        calls = []
+
+        class FakeUp:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, files=None, data=None, headers=None, **k):
+                calls.append(("POST", url))
+                return _FakeResp(
+                    200,
+                    {"id": "mxv_1", "cdnUrl": "https://cdn/x.png", "deleteToken": "del_1"},
+                )
+
+            async def request(self, method, url, headers=None, **k):
+                calls.append((method, url))
+                return _FakeResp(200, {"success": True})
+
+        monkeypatch.setattr(aikit.httpx, "AsyncClient", FakeUp)
+
         p = aikit.AikitProvider(api_key="t", model="qwen3-vl-plus")
-        with pytest.raises(ValueError, match="image URLs, not inline"):
+        captured = {}
+
+        async def fake_complete(image_parts, *, response_schema, user_prompt=None,
+                                description=None, **kw):
+            captured["parts"] = image_parts
+            return "RESULT"
+
+        monkeypatch.setattr(p, "_complete", fake_complete)
+
+        img = tmp_path / "shot.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        out = asyncio.run(
+            p.generate_with_images(images=[img], response_schema=ImageBinaryChallenge)
+        )
+
+        assert out == "RESULT"
+        # aikit got a URL image part, not base64
+        assert captured["parts"] == [
+            {"type": "image_url", "image_url": {"url": "https://cdn/x.png"}}
+        ]
+        # uploaded then deleted
+        assert ("POST", "https://tmp.malvryx.dev/upload") in calls
+        assert any(m == "DELETE" for m, _ in calls)
+
+    def test_upload_disabled_raises(self, monkeypatch, tmp_path):
+        import hcaptcha_challenger.tools.internal.providers.aikit as aikit
+
+        monkeypatch.setenv("AIKIT_IMAGE_UPLOAD", "false")
+        p = aikit.AikitProvider(api_key="t", model="qwen3-vl-plus")
+        img = tmp_path / "shot.png"
+        img.write_bytes(b"x")
+        with pytest.raises(ValueError, match="AIKIT_IMAGE_UPLOAD is disabled"):
             asyncio.run(
-                p.generate_with_images(images=["/tmp/x.png"], response_schema=ImageBinaryChallenge)
+                p.generate_with_images(images=[img], response_schema=ImageBinaryChallenge)
             )
 
     def test_strips_details_block(self):

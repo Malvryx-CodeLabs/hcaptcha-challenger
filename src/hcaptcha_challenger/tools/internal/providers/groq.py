@@ -185,14 +185,6 @@ class GroqProvider:
             resp.raise_for_status()
             return resp.json()  # pragma: no cover - unreachable
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(3),
-        before_sleep=lambda retry_state: logger.warning(
-            f"Retry request ({retry_state.attempt_number}/3) - "
-            f"Wait 3 seconds - Exception: {retry_state.outcome.exception()}"
-        ),
-    )
     async def generate_with_images(
         self,
         *,
@@ -217,6 +209,32 @@ class GroqProvider:
             Parsed response matching the response_schema type.
         """
         image_parts = self._build_image_parts(images)
+        return await self._complete(
+            image_parts,
+            response_schema=response_schema,
+            user_prompt=user_prompt,
+            description=description,
+            **kwargs,
+        )
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(3),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Retry request ({retry_state.attempt_number}/3) - "
+            f"Wait 3 seconds - Exception: {retry_state.outcome.exception()}"
+        ),
+    )
+    async def _complete(
+        self,
+        image_parts: List[dict],
+        *,
+        response_schema: Type[ResponseT],
+        user_prompt: str | None = None,
+        description: str | None = None,
+        **kwargs,
+    ) -> ResponseT:
+        """Run the chat completion given already-built image content parts."""
         temperature = kwargs.get("temperature", 1.0)
         json_schema = response_schema.model_json_schema()
 
