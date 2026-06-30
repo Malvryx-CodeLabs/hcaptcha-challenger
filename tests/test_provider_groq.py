@@ -179,7 +179,7 @@ class TestAikitTokenRefresh:
         monkeypatch.setattr(aikit.httpx, "AsyncClient", _FakeAsyncClient)
 
         p = aikit.AikitProvider(api_key="H4sIAAAA_OLD", model="qwen-max-latest")
-        ok = asyncio.get_event_loop().run_until_complete(p._refresh_token())
+        ok = asyncio.run(p._refresh_token())
         assert ok is True
         assert p._api_key == "H4sIAAAA_NEW_TOKEN"
         assert p._expires_at == 1782755670
@@ -198,7 +198,7 @@ class TestAikitTokenRefresh:
             return True
 
         monkeypatch.setattr(p, "_refresh_token", fake_refresh)
-        asyncio.get_event_loop().run_until_complete(p._ensure_fresh())
+        asyncio.run(p._ensure_fresh())
         assert called["n"] == 1
 
     def test_ensure_fresh_skips_when_no_expiry(self, monkeypatch):
@@ -212,7 +212,7 @@ class TestAikitTokenRefresh:
             return True
 
         monkeypatch.setattr(p, "_refresh_token", fake_refresh)
-        asyncio.get_event_loop().run_until_complete(p._ensure_fresh())
+        asyncio.run(p._ensure_fresh())
         assert called["n"] == 0
 
     def test_base_url_default(self):

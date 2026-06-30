@@ -50,6 +50,10 @@ Changelog = "https://github.com/QIN2DIM/hcaptcha-challenger/blob/master/CHANGELO
 server = [
     "fastapi[all]>=0.115.12",
 ]
+api = [
+    "fastapi>=0.115.12",
+    "uvicorn[standard]>=0.30.0",
+]
 dataset = [
     "typer"
 ]
@@ -59,6 +63,7 @@ camoufox = [
 
 [project.scripts]
 hc = "hcaptcha_challenger.cli.main:main"
+hc-api = "hcaptcha_challenger.api.__main__:main"
 
 # https://packaging.python.org/en/latest/key_projects/#hatch
 # https://hatch.pypa.io/latest/config/build/#build-system

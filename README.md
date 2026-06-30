@@ -36,6 +36,7 @@ Just implement some interfaces to make `AI vs AI` possible.
   - **Robustness:** auto-repair of malformed grid coordinates (e.g. weaker models returning `["00"]` instead of `[0,0]`).
   - `LLMProvider` enum, provider model constants, and provider selection wired through `models.py`, the `Reasoner` base class, and `RoboticArm`.
   - Added example `examples/demo_groq_agent.py`, offline tests `tests/test_provider_groq.py`, and provider sections in the docs.
+- **Production-grade solver API** (`hcaptcha_challenger.api`) — a deployable FastAPI service: `POST /v1/solve` with `{sitekey, siteurl}` returns the hCaptcha token. Bounded concurrency with request **queueing**, API-key auth, rate limiting, health/readiness/stats endpoints, and one-command Docker deploy. Defaults tuned for Linux / 4 GB / 2 CPU; all limits are env-configurable. See [`deploy/README.md`](./deploy/README.md). Run with `hc-api`.
 
 Gemini remains the default provider, so existing setups are unaffected.
 
