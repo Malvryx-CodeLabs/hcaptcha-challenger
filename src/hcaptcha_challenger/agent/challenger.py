@@ -132,12 +132,21 @@ class AgentConfig(BaseSettings):
 
     GEMINI_API_KEY: SecretStr = Field(
         default_factory=lambda: SecretStr(os.environ.get("GEMINI_API_KEY", "")),
-        description="Create API Key https://aistudio.google.com/app/apikey",
+        description="Create API Key https://aistudio.google.com/app/apikey . Accepts "
+        "multiple keys, comma-separated, rotated round-robin with 429/quota failover.",
     )
     GEMINI_BASE_URL: str = Field(
         default_factory=lambda: os.environ.get("GEMINI_BASE_URL", ""),
         description="Optional custom Gemini endpoint (proxy/gateway). "
         "Leave empty to use Google's default API host.",
+    )
+    GEMINI_MODELS: str = Field(
+        default_factory=lambda: os.environ.get("GEMINI_MODELS", ""),
+        description="Optional comma-separated, accuracy-ordered Gemini model fallback "
+        "chain (e.g. 'gemini-3.5-flash,gemini-3-flash,gemini-2.5-flash'). When set, it "
+        "replaces every per-task model; the provider tries each in order, rotating keys "
+        "first and dropping to the next model on rate-limit/unavailable. Useful on the "
+        "free tier where some models throttle quickly.",
     )
 
     GROQ_API_KEY: SecretStr = Field(
@@ -377,6 +386,16 @@ class AgentConfig(BaseSettings):
                     "Please either pass it directly or set the GEMINI_API_KEY environment variable. "
                     "Create API Key -> https://aistudio.google.com/app/apikey"
                 )
+            # When a model fallback chain is provided, use it for every task so the
+            # provider can rotate keys + models on free-tier rate limits.
+            if self.GEMINI_MODELS.strip():
+                for field in (
+                    "CHALLENGE_CLASSIFIER_MODEL",
+                    "IMAGE_CLASSIFIER_MODEL",
+                    "SPATIAL_POINT_REASONER_MODEL",
+                    "SPATIAL_PATH_REASONER_MODEL",
+                ):
+                    setattr(self, field, self.GEMINI_MODELS.strip())
         return self
 
     @property

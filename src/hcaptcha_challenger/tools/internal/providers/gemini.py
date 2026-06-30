@@ -2,10 +2,23 @@
 """
 GeminiProvider - Google Gemini API implementation.
 
-This provider wraps the google-genai SDK to provide image-based content generation.
+Wraps the google-genai SDK for image-based content generation, with built-in
+resilience for free-tier use:
+
+- **Multiple API keys.** ``api_key`` may be one key, a comma-separated string, or
+  a list. Requests spread round-robin across keys; a key that returns 429 /
+  RESOURCE_EXHAUSTED is rotated out for the next.
+- **Model fallback chain.** ``model`` may be a single id or a comma-separated,
+  accuracy-ordered chain (e.g. ``gemini-3.5-flash,gemini-3-flash,...``). When a
+  model is rate-limited on every key, or is unavailable on the key/tier, the
+  provider drops to the next model in the chain.
+
+Images are inlined as bytes (not uploaded via the Files API) so a request works
+with any key without re-uploading on failover.
 """
 import asyncio
 import json
+import mimetypes
 from pathlib import Path
 from typing import List, Type, TypeVar, cast
 
@@ -13,11 +26,15 @@ from google import genai
 from google.genai import types
 from loguru import logger
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_fixed
 
 from hcaptcha_challenger.models import THINKING_LEVEL_MODELS
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
+
+# How many times to retry a single (model, key) call on a transient error
+# (5xx / network / deadline) before giving up on that combination.
+_TRANSIENT_RETRIES = 3
+_TRANSIENT_WAIT_S = 3.0
 
 
 def extract_first_json_block(text: str) -> dict | None:
@@ -31,77 +48,105 @@ def extract_first_json_block(text: str) -> dict | None:
     return None
 
 
+def _normalize_list(value) -> List[str]:
+    """Normalize a str / comma-separated str / list into a clean list."""
+    raw: List[str] = []
+    if isinstance(value, str):
+        raw = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            raw.extend(str(item).split(","))
+    return [v.strip() for v in raw if v and v.strip()]
+
+
 class GeminiProvider:
-    """
-    Gemini-based chat provider implementation.
+    """Gemini-based chat provider with key rotation and model fallback."""
 
-    This class encapsulates all Gemini-specific logic, making it easy to
-    swap out for other providers in the future.
-    """
-
-    def __init__(self, api_key: str, model: str, *, base_url: str | None = None):
+    def __init__(self, api_key, model, *, base_url: str | None = None):
         """
-        Initialize the Gemini provider.
-
         Args:
-            api_key: Gemini API key.
-            model: Model name to use (e.g., "gemini-2.5-pro").
-            base_url: Optional custom endpoint (proxy/gateway). When set, requests
-                are routed there instead of Google's default API host.
+            api_key: One key, a comma-separated string, or a list of keys.
+            model: A model id or a comma-separated, accuracy-ordered fallback chain.
+            base_url: Optional custom endpoint (proxy/gateway).
         """
-        self._api_key = api_key
-        self._model = model
+        self._keys = _normalize_list(api_key)
+        if not self._keys:
+            raise ValueError("At least one Gemini API key is required.")
+        self._models = _normalize_list(model) or [str(model)]
         self._base_url = base_url or None
-        self._client: genai.Client | None = None
+        self._key_idx = -1
+        self._clients: dict[str, genai.Client] = {}
         self._response: types.GenerateContentResponse | None = None
 
+    # -- back-compat: first key/model exposed as the "current" one ----------
     @property
-    def client(self) -> genai.Client:
-        """Lazy-initialize the Gemini client."""
-        if self._client is None:
-            http_options = (
-                types.HttpOptions(base_url=self._base_url) if self._base_url else None
-            )
-            self._client = genai.Client(api_key=self._api_key, http_options=http_options)
-        return self._client
+    def _api_key(self) -> str:
+        return self._keys[0]
+
+    @property
+    def _model(self) -> str:
+        return self._models[0]
 
     @property
     def last_response(self) -> types.GenerateContentResponse | None:
-        """Get the last response for debugging/caching purposes."""
         return self._response
 
-    async def _upload_files(self, files: List[Path]) -> list[types.File]:
-        """Upload multiple files concurrently."""
-        valid_files = [f for f in files if f and Path(f).exists()]
-        if not valid_files:
-            return []
-        upload_tasks = [self.client.aio.files.upload(file=f) for f in valid_files]
-        return list(await asyncio.gather(*upload_tasks))
+    def _client_for(self, key: str) -> genai.Client:
+        if key not in self._clients:
+            http_options = types.HttpOptions(base_url=self._base_url) if self._base_url else None
+            self._clients[key] = genai.Client(api_key=key, http_options=http_options)
+        return self._clients[key]
+
+    def _next_key(self) -> str:
+        self._key_idx = (self._key_idx + 1) % len(self._keys)
+        return self._keys[self._key_idx]
 
     @staticmethod
-    def _files_to_parts(files: List[types.File]) -> List[types.Part]:
-        """Convert uploaded files to parts."""
-        return [types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type) for f in files]
+    def _build_image_parts(images: List[Path]) -> List[types.Part]:
+        """Inline each existing image file as bytes (works with any key)."""
+        parts: List[types.Part] = []
+        for f in images or []:
+            p = Path(f) if f else None
+            if not p or not p.exists():
+                continue
+            mime = mimetypes.guess_type(str(p))[0] or "image/png"
+            parts.append(types.Part.from_bytes(data=p.read_bytes(), mime_type=mime))
+        return parts
 
-    def _set_thinking_config(self, config: types.GenerateContentConfig) -> None:
-        """Configure thinking settings based on model capabilities."""
+    def _build_config(
+        self, model: str, description: str | None, response_schema: Type[ResponseT]
+    ) -> types.GenerateContentConfig:
+        config = types.GenerateContentConfig(
+            system_instruction=description,
+            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_HIGH,
+            response_mime_type="application/json",
+            response_schema=response_schema,
+        )
+        # Thinking config (per-model capability).
         config.thinking_config = types.ThinkingConfig(include_thoughts=True)
-
-        if self._model in THINKING_LEVEL_MODELS:
-            thinking_level = types.ThinkingLevel.HIGH
-
+        if model in THINKING_LEVEL_MODELS:
             config.thinking_config = types.ThinkingConfig(
-                include_thoughts=False, thinking_level=thinking_level
+                include_thoughts=False, thinking_level=types.ThinkingLevel.HIGH
             )
+        return config
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(3),
-        before_sleep=lambda retry_state: logger.warning(
-            f"Retry request ({retry_state.attempt_number}/3) - "
-            f"Wait 3 seconds - Exception: {retry_state.outcome.exception()}"
-        ),
-    )
+    @staticmethod
+    def _classify(exc: Exception) -> str:
+        """Map an SDK exception to 'rate_limit' | 'unavailable' | 'transient' | 'other'."""
+        code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+        msg = str(exc).lower()
+        if code == 429 or "resource_exhausted" in msg or "rate limit" in msg or "quota" in msg:
+            return "rate_limit"
+        if code in (404, 400) or "not found" in msg or "not supported" in msg or (
+            "invalid argument" in msg and "model" in msg
+        ):
+            return "unavailable"
+        if (isinstance(code, int) and 500 <= code < 600) or any(
+            t in msg for t in ("unavailable", "deadline", "timeout", "internal error")
+        ):
+            return "transient"
+        return "other"
+
     async def generate_with_images(
         self,
         *,
@@ -111,62 +156,83 @@ class GeminiProvider:
         description: str | None = None,
         **kwargs,
     ) -> ResponseT:
-        """
-        Generate content with image inputs.
-
-        Args:
-            images: List of image file paths to include in the request.
-            user_prompt: User-provided prompt/instructions.
-            description: System instruction/description for the model.
-            response_schema: Pydantic model class for structured output.
-            **kwargs: Additional options passed to the API.
-
-        Returns:
-            Parsed response matching the response_schema type.
-        """
-        # Upload files
-        uploaded_files = await self._upload_files(images)
-        parts = self._files_to_parts(uploaded_files)
-
-        # Add user prompt if provided
+        parts = self._build_image_parts(images)
         if user_prompt and isinstance(user_prompt, str):
             parts.append(types.Part.from_text(text=user_prompt))
-
         contents = [types.Content(role="user", parts=parts)]
 
-        # Build config
-        config = types.GenerateContentConfig(
-            system_instruction=description,
-            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_HIGH,
-            response_mime_type="application/json",
-            response_schema=response_schema,
-        )
+        last_exc: Exception | None = None
+        for model in self._models:
+            # Give every key a chance on this model before dropping to the next.
+            for _ in range(len(self._keys)):
+                key = self._next_key()
+                client = self._client_for(key)
+                config = self._build_config(model, description, response_schema)
+                try:
+                    return await self._generate_once(
+                        client, model, contents, config, response_schema
+                    )
+                except Exception as e:  # noqa: BLE001 - classified below
+                    last_exc = e
+                    kind = self._classify(e)
+                    if kind == "rate_limit":
+                        logger.warning(
+                            f"Gemini model={model} key #{self._key_idx + 1}/{len(self._keys)} "
+                            f"rate-limited; rotating key."
+                        )
+                        continue
+                    if kind == "unavailable":
+                        logger.warning(
+                            f"Gemini model={model} unavailable on this key/tier "
+                            f"({e}); falling back to the next model."
+                        )
+                        break  # stop trying keys for this model; go to next model
+                    # 'other' (e.g. parse/validation) — do not mask it.
+                    raise
+            else:
+                # for-loop completed without break => every key was rate-limited.
+                logger.warning(
+                    f"Gemini model={model} exhausted across all keys; trying next model."
+                )
 
-        # Set thinking config if applicable
-        self._set_thinking_config(config=config)
+        raise last_exc or ValueError("Gemini request failed across all keys and models.")
 
-        # Generate response
-        self._response: types.GenerateContentResponse = (
-            await self.client.aio.models.generate_content(
-                model=self._model, contents=contents, config=config
-            )
-        )
+    async def _generate_once(
+        self, client, model, contents, config, response_schema: Type[ResponseT]
+    ) -> ResponseT:
+        """One (model, key) call with a small transient-error retry, then parse."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                self._response = await client.aio.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+                break
+            except Exception as e:  # noqa: BLE001
+                if self._classify(e) == "transient" and attempt < _TRANSIENT_RETRIES:
+                    logger.warning(
+                        f"Transient Gemini error on {model} "
+                        f"({attempt}/{_TRANSIENT_RETRIES}): {e}; retrying in {_TRANSIENT_WAIT_S}s."
+                    )
+                    await asyncio.sleep(_TRANSIENT_WAIT_S)
+                    continue
+                raise
+        return self._parse(self._response, response_schema)
 
-        # Parse response
-        if self._response.parsed:
-            parsed = self._response.parsed
+    @staticmethod
+    def _parse(response, response_schema: Type[ResponseT]) -> ResponseT:
+        if response.parsed:
+            parsed = response.parsed
             if isinstance(parsed, BaseModel):
                 return response_schema(**parsed.model_dump())
             if isinstance(parsed, dict):
                 return response_schema(**cast(dict[str, object], parsed))
-
-        # Fallback to JSON extraction
-        if response_text := self._response.text:
+        if response_text := response.text:
             json_data = extract_first_json_block(response_text)
             if json_data:
                 return response_schema(**json_data)
-
-        raise ValueError(f"Failed to parse response: {response_text}")
+        raise ValueError(f"Failed to parse response: {getattr(response, 'text', response)}")
 
     def cache_response(self, path: Path) -> None:
         """Cache the last response to a file."""

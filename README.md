@@ -31,6 +31,7 @@ Just implement some interfaces to make `AI vs AI` possible.
 - **Added multiple alternative LLM providers** alongside the default Gemini backend, selectable via a new `LLM_PROVIDER` setting on `AgentConfig`. The active provider only needs its own API key.
   - **Groq** (`LLM_PROVIDER="groq"`) — Groq's vision models (Llama 4 Scout, default). New `GroqProvider` talking to Groq's OpenAI-compatible endpoint via `httpx` (no new required dependencies).
   - **Gemini custom endpoint** — `GEMINI_BASE_URL` routes the native Gemini provider through a proxy/gateway while keeping its schema-enforced output.
+  - **Gemini key + model rotation** — `GEMINI_API_KEY` accepts multiple comma-separated keys (round-robin + 429/quota failover), and `GEMINI_MODELS` takes an accuracy-ordered fallback chain that drops to the next model when one is rate-limited or unavailable (ideal for the free tier). Images are inlined so rotation needs no re-upload.
   - **Generic OpenAI-compatible** (`LLM_PROVIDER="openai"`) — any `/v1/chat/completions` endpoint (e.g. Qwen-VL) via `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL`.
   - **Qwen via aikit.club** (`LLM_PROVIDER="aikit"`) — `AikitProvider` with automatic token refresh (`/v1/refresh`, proactive + on-401).
   - **Omegatech gateway** (`LLM_PROVIDER="omegatech"`) — gpt-4o-mini-class vision via a single-GET gateway, no API key. Image-URL only, so screenshots are uploaded to a temp host (shared `TempUploader`) and deleted after each solve.

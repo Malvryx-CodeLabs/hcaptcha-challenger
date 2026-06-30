@@ -337,6 +337,23 @@ DEFAULT_OMEGATECH_MODEL: str = "Gpt-4-mini"
 # transparently swap them for Groq defaults when LLM_PROVIDER=groq.
 GEMINI_DEFAULT_MODELS: List[str] = [DEFAULT_SCOT_MODEL, DEFAULT_FAST_SHOT_MODEL]
 
+# Recommended Gemini model fallback chain for FREE-TIER users, ordered best->worst
+# by expected accuracy on the visual/coordinate tasks. The GeminiProvider tries
+# each in order, rotating API keys first and dropping to the next model when a
+# model is rate-limited (RESOURCE_EXHAUSTED) or unavailable on the key/tier.
+# Full "flash" tiers rank above "flash-lite"; newer generations rank higher.
+# Override with the GEMINI_MODELS env var (comma-separated). Unknown/unavailable
+# model ids are skipped automatically, so verify ids against your key's catalog:
+#   curl https://generativelanguage.googleapis.com/v1beta/models -H "x-goog-api-key: $GEMINI_API_KEY"
+DEFAULT_GEMINI_MODEL_CHAIN: List[str] = [
+    "gemini-3.5-flash",
+    "gemini-3-flash",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemma-4-31b-it",
+]
+
 
 class ChallengeRouterResult(BaseModel):
     challenge_prompt: str
