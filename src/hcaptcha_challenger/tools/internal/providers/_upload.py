@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 TempUploader - host local screenshots on a temporary file host so vision APIs
-that only accept image *URLs* (aikit, Omegatech) can fetch them, then delete.
+that only accept image *URLs* (e.g. aikit) can fetch them, then delete.
 
 Configured from environment variables (shared by every URL-only provider):
 

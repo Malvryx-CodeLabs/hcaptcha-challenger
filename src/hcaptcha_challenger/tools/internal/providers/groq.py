@@ -36,6 +36,16 @@ MAX_BASE64_IMAGE_BYTES = 4 * 1024 * 1024
 # Groq accepts at most 5 images per request.
 MAX_IMAGES_PER_REQUEST = 5
 
+# Default sampling temperature for the OpenAI-compatible path (Groq / generic
+# OpenAI / aikit). hCaptcha tasks are pixel/grid-coordinate localization, which
+# is a *deterministic* perception task, not a creative one: a high temperature
+# makes weaker vision models emit jittery, inconsistent coordinates (wrong cell,
+# wrong click point) which then fail and trigger slow retries. A low temperature
+# makes their output stable and repeatable, which materially improves accuracy
+# and latency. Strong models are near-deterministic anyway, so they are
+# unaffected. Callers may still override per-request via ``temperature=``.
+DEFAULT_TEMPERATURE = 0.1
+
 
 def extract_first_json_block(text: str) -> dict | None:
     """Extract the first JSON code block from text."""
@@ -235,7 +245,7 @@ class GroqProvider:
         **kwargs,
     ) -> ResponseT:
         """Run the chat completion given already-built image content parts."""
-        temperature = kwargs.get("temperature", 1.0)
+        temperature = kwargs.get("temperature", DEFAULT_TEMPERATURE)
         json_schema = response_schema.model_json_schema()
 
         base_payload: dict[str, Any] = {

@@ -294,8 +294,6 @@ class LLMProvider(str, Enum):
     OPENAI = "openai"
     # Qwen via the aikit.club proxy (OpenAI-compatible + token refresh).
     AIKIT = "aikit"
-    # Omegatech gateway (GPT-4o-mini class) — single GET, image-URL only.
-    OMEGATECH = "omegatech"
 
 
 # https://console.groq.com/docs/vision — vision-capable models on Groq.
@@ -326,12 +324,6 @@ DEFAULT_GROQ_FAST_SHOT_MODEL: GroqModelType = "meta-llama/llama-4-scout-17b-16e-
 # NOTE: aikit only accepts image *URLs*, not inline base64, so it cannot be used
 # for the screenshot-based solver (which inlines images). See AikitProvider.
 DEFAULT_AIKIT_MODEL: str = "qwen3-vl-plus"
-
-# Default model (URL path segment) for the Omegatech gateway. Backed by
-# gpt-4o-mini, which is stronger at general vision than llama-4-scout/qwen but
-# still weaker than Gemini at precise pixel/grid coordinate localization.
-#   https://omegatech-api.dixonomega.tech/api/ai/Gpt-4-mini
-DEFAULT_OMEGATECH_MODEL: str = "Gpt-4-mini"
 
 # The Gemini default models. Used to detect "still at default" so we can
 # transparently swap them for Groq defaults when LLM_PROVIDER=groq.

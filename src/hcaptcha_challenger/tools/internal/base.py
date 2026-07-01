@@ -93,15 +93,6 @@ class Reasoner(ABC, Generic[ModelT, ResponseT]):
                 base_url=self._base_url or AIKIT_BASE_URL,
                 auto_refresh=self._auto_refresh,
             )
-        # Omegatech: single-GET gateway (gpt-4o-mini), image-URL only.
-        if self._provider_type == "omegatech":
-            from .providers.omegatech import OMEGATECH_BASE_URL, OmegatechProvider
-
-            return OmegatechProvider(
-                api_key=self._api_key,
-                model=self._model,
-                base_url=self._base_url or OMEGATECH_BASE_URL,
-            )
         # Both Groq and generic "openai" backends speak the OpenAI-compatible
         # Chat Completions protocol, so they share one provider implementation.
         if self._provider_type in ("groq", "openai"):

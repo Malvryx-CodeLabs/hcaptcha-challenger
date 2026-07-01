@@ -38,7 +38,6 @@ from hcaptcha_challenger.models import (
     DEFAULT_GROQ_SCOT_MODEL,
     DEFAULT_GROQ_FAST_SHOT_MODEL,
     DEFAULT_AIKIT_MODEL,
-    DEFAULT_OMEGATECH_MODEL,
     GEMINI_DEFAULT_MODELS,
     SpatialPath,
     CaptchaPayload,
@@ -158,7 +157,8 @@ class AgentConfig(BaseSettings):
     # == OpenAI-compatible provider (e.g. Qwen-VL) == #
     OPENAI_API_KEY: SecretStr = Field(
         default_factory=lambda: SecretStr(os.environ.get("OPENAI_API_KEY", "")),
-        description="API key for the OpenAI-compatible endpoint. Required when LLM_PROVIDER='openai'.",
+        description="API key for the OpenAI-compatible endpoint. Required when LLM_PROVIDER='openai'. "
+        "Accepts multiple keys, comma-separated, rotated round-robin with 429 failover.",
     )
     OPENAI_BASE_URL: str = Field(
         default_factory=lambda: os.environ.get("OPENAI_BASE_URL", ""),
@@ -193,23 +193,6 @@ class AgentConfig(BaseSettings):
     AIKIT_AUTO_REFRESH: bool = Field(
         default=True,
         description="Auto-refresh the aikit token via /v1/refresh near expiry and on 401.",
-    )
-
-    # == Omegatech gateway (GPT-4o-mini class, single-GET, image-URL only) == #
-    OMEGATECH_API_KEY: SecretStr = Field(
-        default_factory=lambda: SecretStr(os.environ.get("OMEGATECH_API_KEY", "")),
-        description="Optional. The Omegatech gateway needs no auth; this field exists "
-        "only for parity and may be left empty.",
-    )
-    OMEGATECH_BASE_URL: str = Field(
-        default_factory=lambda: os.environ.get(
-            "OMEGATECH_BASE_URL", "https://omegatech-api.dixonomega.tech/api/ai"
-        ),
-        description="Base URL for the Omegatech gateway (model name is appended as a path segment).",
-    )
-    OMEGATECH_MODEL: str = Field(
-        default_factory=lambda: os.environ.get("OMEGATECH_MODEL", DEFAULT_OMEGATECH_MODEL),
-        description="Model path segment served by Omegatech (default 'Gpt-4-mini').",
     )
 
     cache_dir: Path = Path("tmp/.cache")
@@ -251,6 +234,14 @@ class AgentConfig(BaseSettings):
     )
     RETRY_ON_FAILURE: bool = Field(
         default=True, description="Re-execute the challenge when it fails"
+    )
+    MAX_RETRY_ON_FAILURE: int = Field(
+        default=5,
+        description="Maximum number of retry rounds when a challenge submission fails "
+        "(only used when RETRY_ON_FAILURE=true). Bounds total solve time so the HTTP "
+        "response returns before an upstream proxy (e.g. Cloudflare's ~100s edge) times "
+        "out with a 524, and prevents an unbounded retry loop from growing memory. Set "
+        "to 0 for a single attempt with no retries.",
     )
     WAIT_FOR_CHALLENGE_VIEW_TO_RENDER_MS: int = Field(
         default=1500,
@@ -368,17 +359,6 @@ class AgentConfig(BaseSettings):
             ):
                 if getattr(self, field) in GEMINI_DEFAULT_MODELS:
                     setattr(self, field, self.AIKIT_MODEL)
-        elif self.LLM_PROVIDER == LLMProvider.OMEGATECH:
-            # No API key required. Fill any model field still at a Gemini default
-            # with the Omegatech model path segment (default 'Gpt-4-mini').
-            for field in (
-                "CHALLENGE_CLASSIFIER_MODEL",
-                "IMAGE_CLASSIFIER_MODEL",
-                "SPATIAL_POINT_REASONER_MODEL",
-                "SPATIAL_PATH_REASONER_MODEL",
-            ):
-                if getattr(self, field) in GEMINI_DEFAULT_MODELS:
-                    setattr(self, field, self.OMEGATECH_MODEL)
         else:
             if not self.GEMINI_API_KEY.get_secret_value():
                 raise ValueError(
@@ -471,9 +451,6 @@ class RoboticArm:
             api_key = self.config.AIKIT_API_KEY.get_secret_value()
             base_url = self.config.AIKIT_BASE_URL
             auto_refresh = self.config.AIKIT_AUTO_REFRESH
-        elif self.config.LLM_PROVIDER == LLMProvider.OMEGATECH:
-            api_key = self.config.OMEGATECH_API_KEY.get_secret_value()
-            base_url = self.config.OMEGATECH_BASE_URL
         else:
             api_key = self.config.GEMINI_API_KEY.get_secret_value()
             base_url = self.config.GEMINI_BASE_URL or None
@@ -1123,37 +1100,51 @@ class AgentV:
     async def wait_for_challenge(self) -> ChallengeSignal:
         # Assigning human-computer challenge tasks to the main thread coroutine.
         # ----------------------------------------------------------------------
-        try:
-            if self._captcha_response_queue.empty():
-                await asyncio.wait_for(self._solve_captcha(), timeout=self.config.EXECUTION_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.error("Challenge execution timed out", timeout=self.config.EXECUTION_TIMEOUT)
-            return ChallengeSignal.EXECUTION_TIMEOUT
+        # Bounded retry loop: a failed submission retries the whole strategy, but
+        # only up to MAX_RETRY_ON_FAILURE rounds. This used to recurse without a
+        # bound, which let a hard site loop until the request outlived an upstream
+        # proxy's edge timeout (Cloudflare 524) and grew the coroutine stack plus
+        # per-round state (screenshots/queues) in memory.
+        max_retries = self.config.MAX_RETRY_ON_FAILURE if self.config.RETRY_ON_FAILURE else 0
+        attempt = 0
+        while True:
+            try:
+                if self._captcha_response_queue.empty():
+                    await asyncio.wait_for(
+                        self._solve_captcha(), timeout=self.config.EXECUTION_TIMEOUT
+                    )
+            except asyncio.TimeoutError:
+                logger.error("Challenge execution timed out", timeout=self.config.EXECUTION_TIMEOUT)
+                return ChallengeSignal.EXECUTION_TIMEOUT
 
-        # Waiting for hCAPTCHA response processing result
-        # -----------------------------------------------
-        # After the completion of the human-machine challenge workflow,
-        # it is expected to obtain a signal indicating whether the challenge was successful in the cr_queue.
-        logger.debug("Start checking captcha response")
-        try:
-            cr = await asyncio.wait_for(
-                self._captcha_response_queue.get(), timeout=self.config.RESPONSE_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"Wait for captcha response timeout {self.config.RESPONSE_TIMEOUT}s")
-            return ChallengeSignal.EXECUTION_TIMEOUT
-        else:
-            # Match: Timeout / Loss
-            if not cr or not cr.is_pass:
-                if self.config.RETRY_ON_FAILURE:
-                    logger.warning("Failed to challenge, try to retry the strategy")
-                    await self.page.wait_for_timeout(2000)
-                    return await self.wait_for_challenge()
-                return ChallengeSignal.FAILURE
+            # Waiting for hCAPTCHA response processing result
+            # -----------------------------------------------
+            # After the completion of the human-machine challenge workflow, it is
+            # expected to obtain a success/failure signal from the cr_queue.
+            logger.debug("Start checking captcha response")
+            try:
+                cr = await asyncio.wait_for(
+                    self._captcha_response_queue.get(), timeout=self.config.RESPONSE_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Wait for captcha response timeout {self.config.RESPONSE_TIMEOUT}s")
+                return ChallengeSignal.EXECUTION_TIMEOUT
+
             # Match: Success
-            if cr.is_pass:
+            if cr and cr.is_pass:
                 logger.success("Challenge success")
                 self._cache_validated_captcha_response(cr)
                 return ChallengeSignal.SUCCESS
 
-        return ChallengeSignal.FAILURE
+            # Match: Timeout / Loss — retry the strategy until the bound is hit.
+            if attempt >= max_retries:
+                if max_retries:
+                    logger.error(
+                        f"Failed to challenge after {max_retries} retry "
+                        f"{'round' if max_retries == 1 else 'rounds'}; giving up."
+                    )
+                return ChallengeSignal.FAILURE
+
+            attempt += 1
+            logger.warning(f"Failed to challenge, retrying the strategy ({attempt}/{max_retries})")
+            await self.page.wait_for_timeout(2000)

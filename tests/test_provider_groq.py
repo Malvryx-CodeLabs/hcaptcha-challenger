@@ -236,6 +236,133 @@ class TestGroqKeyRotation:
             asyncio.run(p._post({}))
 
 
+class TestDefaultTemperature:
+    """Weak vision models need a low temperature for stable coordinates."""
+
+    def test_default_temperature_is_low(self):
+        import hcaptcha_challenger.tools.internal.providers.groq as groq
+
+        assert groq.DEFAULT_TEMPERATURE == 0.1
+
+    def test_complete_uses_low_default_temperature(self, monkeypatch):
+        captured = {}
+
+        async def fake_post(self, payload):
+            captured["payload"] = payload
+            return {
+                "choices": [
+                    {"message": {"content": '{"challenge_prompt": "p", "coordinates": []}'}}
+                ]
+            }
+
+        monkeypatch.setattr(GroqProvider, "_post", fake_post)
+        p = GroqProvider(api_key="gsk_test", model="m")
+        asyncio.run(p._complete([], response_schema=ImageBinaryChallenge, user_prompt="go"))
+        assert captured["payload"]["temperature"] == 0.1
+
+    def test_explicit_temperature_overrides_default(self, monkeypatch):
+        captured = {}
+
+        async def fake_post(self, payload):
+            captured["payload"] = payload
+            return {
+                "choices": [
+                    {"message": {"content": '{"challenge_prompt": "p", "coordinates": []}'}}
+                ]
+            }
+
+        monkeypatch.setattr(GroqProvider, "_post", fake_post)
+        p = GroqProvider(api_key="gsk_test", model="m")
+        asyncio.run(
+            p._complete([], response_schema=ImageBinaryChallenge, temperature=0.7)
+        )
+        assert captured["payload"]["temperature"] == 0.7
+
+
+class TestOpenAIProviderWiring:
+    """The generic 'openai' provider shares GroqProvider, incl. multi-key rotation."""
+
+    def test_openai_provider_type_gets_multiple_keys(self):
+        from hcaptcha_challenger.tools.image_classifier import ImageClassifier
+
+        clf = ImageClassifier(
+            "k1,k2,k3",
+            model="qwen-vl-max",
+            provider_type="openai",
+            base_url="https://host/v1",
+        )
+        assert isinstance(clf._provider, GroqProvider)
+        assert clf._provider._keys == ["k1", "k2", "k3"]
+        assert clf._provider._base_url == "https://host/v1"
+
+
+class TestBoundedRetry:
+    """wait_for_challenge must retry a bounded number of times, not recurse forever."""
+
+    def _make_agent(self, *, retry, max_retries, results):
+        import types
+
+        from hcaptcha_challenger.agent.challenger import AgentV
+        from hcaptcha_challenger.models import CaptchaResponse
+
+        agent = AgentV.__new__(AgentV)  # bypass __init__ (no browser needed)
+        agent._captcha_response_queue = asyncio.Queue()
+        agent.config = types.SimpleNamespace(
+            EXECUTION_TIMEOUT=5,
+            RESPONSE_TIMEOUT=5,
+            RETRY_ON_FAILURE=retry,
+            MAX_RETRY_ON_FAILURE=max_retries,
+        )
+        counter = {"solve": 0}
+        outcomes = iter(results)
+
+        async def fake_solve():
+            counter["solve"] += 1
+            agent._captcha_response_queue.put_nowait(CaptchaResponse(**{"pass": next(outcomes)}))
+
+        agent._solve_captcha = fake_solve
+        agent._cache_validated_captcha_response = lambda cr: None
+        agent.page = types.SimpleNamespace(wait_for_timeout=lambda ms: asyncio.sleep(0))
+        return agent, counter
+
+    def test_stops_after_max_retries(self):
+        from hcaptcha_challenger.models import ChallengeSignal
+
+        agent, counter = self._make_agent(retry=True, max_retries=3, results=[False] * 4)
+        signal = asyncio.run(agent.wait_for_challenge())
+        assert signal == ChallengeSignal.FAILURE
+        # 1 initial attempt + 3 retries == 4 solves, then gives up (no 5th).
+        assert counter["solve"] == 4
+
+    def test_succeeds_before_exhausting_retries(self):
+        from hcaptcha_challenger.models import ChallengeSignal
+
+        agent, counter = self._make_agent(
+            retry=True, max_retries=5, results=[False, False, True]
+        )
+        signal = asyncio.run(agent.wait_for_challenge())
+        assert signal == ChallengeSignal.SUCCESS
+        assert counter["solve"] == 3
+
+    def test_no_retry_means_single_attempt(self):
+        from hcaptcha_challenger.models import ChallengeSignal
+
+        agent, counter = self._make_agent(retry=False, max_retries=5, results=[False])
+        signal = asyncio.run(agent.wait_for_challenge())
+        assert signal == ChallengeSignal.FAILURE
+        assert counter["solve"] == 1
+
+
+class TestRetryConfig:
+    def test_default_max_retry(self, monkeypatch):
+        from hcaptcha_challenger.agent.challenger import AgentConfig
+
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        cfg = AgentConfig(LLM_PROVIDER="gemini", GEMINI_API_KEY="x")
+        assert cfg.MAX_RETRY_ON_FAILURE == 5
+        assert cfg.RETRY_ON_FAILURE is True
+
+
 class TestAikitTokenRefresh:
     def test_refresh_updates_slot(self, monkeypatch):
         import hcaptcha_challenger.tools.internal.providers.aikit as aikit
